@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"time"
 
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
+	"gopkg.in/hraban/opus.v2"
 )
 
 var (
@@ -58,6 +60,9 @@ const (
 	VHF_MAX_FREQ = 174.0 // SA818U upper limit, in MHz
 	UHF_MIN_FREQ = 400.0 // SA818U lower limit, in MHz
 	UHF_MAX_FREQ = 480.0 // SA818U upper limit, in MHz (DRA818U can only go to 470MHz)
+
+	AUDIO_SAMPLING_RATE = 48000 // 48kHz
+	OPUS_FRAME_SIZE     = 1920  // 40ms at 48kHz
 )
 
 type Group struct {
@@ -80,6 +85,8 @@ type CommandProcessor struct {
 	radioStatus byte
 	hwver       byte
 	windowSize  int
+
+	audioDecoder *opus.Decoder
 }
 
 func (p *CommandProcessor) processBytes(buf []byte) {
@@ -181,7 +188,21 @@ func (p *CommandProcessor) processCommand() {
 		smeter := int(p.params[0]) & 0xFF
 		log.Printf("S-Meter: %d\n", smeter)
 	case RES_RX_AUDIO:
-		fmt.Println("RX AUDIO (%v bytes):", p.plen)
+		log.Printf("RX AUDIO (%v bytes):", p.plen)
+		h := p.params[0]
+		cn := (h & 0xF8) >> 3
+		s := (h & 0x04) >> 2
+		fc := (h & 0x03)
+		log.Printf("Header: %02x, conf: %d, silk: %d, frame-code: %d\n", h, cn, s, fc)
+
+		var out [OPUS_FRAME_SIZE]int16
+		if n, err := p.audioDecoder.Decode(p.params, out[:]); err != nil {
+			log.Printf("Decode: %v\n", err)
+			fmt.Println(toByteArray(p.params))
+		} else {
+			log.Printf("Decoded %d samples\n", n)
+		}
+
 	default:
 		fmt.Printf("Unknown command %02x: %02x\n", p.cmd, p.params)
 	}
@@ -214,12 +235,27 @@ func (p *CommandProcessor) newCommand(cmd byte, params []byte) []byte {
 	return buffer
 }
 
+func toByteArray(b []byte) string {
+	var result strings.Builder
+	result.WriteString("  {\n    ")
+	for _, c := range b {
+		if c >= 0x20 && c <= 0x7E && c != '\'' && c != '\\' {
+			result.WriteString(fmt.Sprintf("'%c', ", c))
+		} else {
+			result.WriteString(fmt.Sprintf("0x%02x, ", c))
+		}
+	}
+	result.WriteString("\n  },")
+	return result.String()
+}
+
 func main() {
 	dev := flag.String("dev", "", "Serial device to use (e.g. /dev/ttyUSB0)")
 	baud := flag.Int("baud", 115200, "Baud rate")
 	sbreak := flag.Bool("break", false, "Send BREAK signal")
 	dtr := flag.Bool("dtr", false, "Set DTR")
 	rts := flag.Bool("rts", false, "Set RTS")
+	wait := flag.Duration("wait", 5*time.Second, "Receive time before exiting")
 	flag.BoolVar(&debug, "debug", debug, "Enable debug output")
 	flag.Parse()
 
@@ -263,9 +299,22 @@ func main() {
 		log.Fatalf("Open %v: %v", *dev, err)
 	}
 
-	defer port.Close()
-
 	p := &CommandProcessor{windowSize: 1024}
+	p.audioDecoder, err = opus.NewDecoder(AUDIO_SAMPLING_RATE, 1)
+	if err != nil {
+		log.Fatalf("NewDecoder: %v", err)
+	}
+
+	defer func() {
+		log.Println("Sending STOP command")
+		if _, err := port.Write(p.newCommand(CMD_STOP, nil)); err != nil {
+			log.Fatalf("Send STOP: %v", err)
+			return
+		}
+
+		port.Drain()
+		port.Close()
+	}()
 
 	// Read from the serial port
 	go func() {
@@ -358,5 +407,5 @@ func main() {
 	port.Drain()
 
 	fmt.Println("Press Ctrl+C to exit")
-	time.Sleep(60 * time.Second)
+	time.Sleep(*wait)
 }

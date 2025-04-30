@@ -10,10 +10,17 @@ import (
 	"time"
 
 	"go.bug.st/serial"
+	"go.bug.st/serial/enumerator"
 )
 
 var (
+	// Must match the ESP32 device we support.
+	// Idx 0 matches https://www.amazon.com/gp/product/B08D5ZD528
+	esp32_vendor_ids  = []string{"10C4", "1A86"}
+	esp32_product_ids = []string{"EA60", "7523"}
+
 	cmd_prefix = []byte{0xDE, 0xAD, 0xBE, 0xEF}
+	debug      = false
 )
 
 const (
@@ -43,20 +50,23 @@ const (
 
 	MODE_VHF = 0x04
 	MODE_UHF = 0x05
+
+	DRA818_25K  = 0x01
+	DRA818_12K5 = 0x00
+
+	VHF_MIN_FREQ = 134.0 // SA818U lower limit, in MHz
+	VHF_MAX_FREQ = 174.0 // SA818U upper limit, in MHz
+	UHF_MIN_FREQ = 400.0 // SA818U lower limit, in MHz
+	UHF_MAX_FREQ = 480.0 // SA818U upper limit, in MHz (DRA818U can only go to 470MHz)
 )
 
-func NewCommand(cmd byte, params []byte) []byte {
-	l := len(params)
-	buffer := make([]byte, 4+1+2+l)
-	copy(buffer[:4], cmd_prefix)
-	buffer[4] = cmd
-	binary.LittleEndian.PutUint16(buffer[5:], uint16(l))
-	if l > 0 {
-		copy(buffer[7:], params)
-	}
-
-	log.Printf("NewCommand %02x: %02x\n", cmd, buffer)
-	return buffer
+type Group struct {
+	bw       byte // Bandwidth (25kHz, 12.5kHz)
+	freq_tx  float32
+	freq_rx  float32
+	ctxss_tx byte
+	squelch  byte
+	ctxss_rx byte
 }
 
 type CommandProcessor struct {
@@ -123,7 +133,9 @@ func (p *CommandProcessor) processBytes(buf []byte) {
 }
 
 func (p *CommandProcessor) processCommand() {
-	//log.Println("processCommand", p.cmd, p.plen) //, p.params)
+	if debug {
+		log.Println("processCommand", p.cmd, p.plen) //, p.params)
+	}
 
 	switch p.cmd {
 	case RES_DEBUG_INFO:
@@ -152,7 +164,7 @@ func (p *CommandProcessor) processCommand() {
 		p.radioStatus = p.params[2]
 		p.hwver = p.params[3]
 		p.windowSize = int(binary.LittleEndian.Uint32(p.params[4:8]))
-		log.Printf("Version: %d, rstatus: %02x, hwver: %02x, windowSize: %d\n", p.version, p.radioStatus, p.hwver, p.windowSize)
+		log.Printf("Version: %d, rstatus: %c, hwver: %02x, windowSize: %d\n", p.version, p.radioStatus, p.hwver, p.windowSize)
 	case RES_WINDOW_UPDATE:
 		if p.plen != 4 {
 			log.Printf("Invalid window update length: %d (%02x)\n", p.plen, p.params)
@@ -168,6 +180,8 @@ func (p *CommandProcessor) processCommand() {
 		}
 		smeter := int(p.params[0]) & 0xFF
 		log.Printf("S-Meter: %d\n", smeter)
+	case RES_RX_AUDIO:
+		fmt.Println("RX AUDIO (%v bytes):", p.plen)
 	default:
 		fmt.Printf("Unknown command %02x: %02x\n", p.cmd, p.params)
 	}
@@ -178,7 +192,7 @@ func (p *CommandProcessor) processCommand() {
 	p.params = nil
 }
 
-func (p *CommandProcessor) NewCommand(cmd byte, params []byte) []byte {
+func (p *CommandProcessor) newCommand(cmd byte, params []byte) []byte {
 	l := len(params)
 	buffer := make([]byte, 4+1+2+l)
 	copy(buffer[:4], cmd_prefix)
@@ -188,7 +202,9 @@ func (p *CommandProcessor) NewCommand(cmd byte, params []byte) []byte {
 		copy(buffer[7:], params)
 	}
 
-	log.Printf("NewCommand %02x: %02x\n", cmd, buffer)
+	if debug {
+		log.Printf("newCommand %02x: %02x\n", cmd, buffer)
+	}
 	l = len(buffer)
 	if l > p.windowSize {
 		log.Printf("Window size exceeded: %d > %d\n", l, p.windowSize)
@@ -204,28 +220,11 @@ func main() {
 	sbreak := flag.Bool("break", false, "Send BREAK signal")
 	dtr := flag.Bool("dtr", false, "Set DTR")
 	rts := flag.Bool("rts", false, "Set RTS")
-	//stop := flag.Bool("stop", false, "Send STOP command")
-	//config := flag.Bool("config", false, "Send CONFIG command")
-	loglevel := flag.String("loglevel", "debug", "Log level (none, debug, info, warn, error, trace)")
+	flag.BoolVar(&debug, "debug", debug, "Enable debug output")
 	flag.Parse()
 
-	switch *loglevel {
-	case "debug":
-
-	case "info":
-
-	case "warn":
-
-	case "error":
-
-	case "trace":
-
-	case "none":
-
-	}
-
 	if *dev == "" {
-		ports, err := serial.GetPortsList()
+		ports, err := enumerator.GetDetailedPortsList()
 		if err != nil {
 			log.Fatalf("GetPorts: %v", err)
 		}
@@ -233,11 +232,23 @@ func main() {
 			fmt.Println("No serial ports found!")
 			return
 		}
-		for i, port := range ports {
-			fmt.Printf("port %v: %v\n", i, port)
+
+		for _, port := range ports {
+			if port.IsUSB {
+				for i, id := range esp32_vendor_ids {
+					if port.VID == id && port.PID == esp32_product_ids[i] {
+						*dev = port.Name
+						fmt.Printf("Found ESP32 device: %s\n", port.Name)
+						break
+					}
+				}
+			}
 		}
 
-		return
+		if *dev == "" {
+			fmt.Println("No ESP32 device found!")
+			return
+		}
 	}
 
 	mode := &serial.Mode{
@@ -254,7 +265,7 @@ func main() {
 
 	defer port.Close()
 
-	p := &CommandProcessor{}
+	p := &CommandProcessor{windowSize: 1024}
 
 	// Read from the serial port
 	go func() {
@@ -299,23 +310,52 @@ func main() {
 		time.Sleep(1 * time.Second)
 	}
 
-	//if *stop {
+	if !p.hello {
+		log.Println("No HELLO message received")
+		return
+	}
+
 	log.Println("Sending STOP command")
-	if _, err := port.Write(NewCommand(CMD_STOP, nil)); err != nil {
+	if _, err := port.Write(p.newCommand(CMD_STOP, nil)); err != nil {
 		log.Fatalf("Send STOP: %v", err)
 		return
 	}
 
+	port.Drain()
 	time.Sleep(1 * time.Second)
-	//}
 
-	//if *config {
 	log.Println("Sending CONFIG command")
-	if _, err := port.Write(NewCommand(CMD_CONFIG, []byte{MODE_VHF})); err != nil {
+	if _, err := port.Write(p.newCommand(CMD_CONFIG, []byte{MODE_VHF})); err != nil {
 		log.Fatalf("Send CONFIG: %v", err)
 		return
 	}
-	//}
+
+	port.Drain()
+
+	// Wait for VERSION message
+	for i := 0; i < 10 && p.version == 0; i++ {
+		log.Println("Waiting for VERSION message...")
+		time.Sleep(1 * time.Second)
+	}
+
+	log.Println("Sending GROUP command")
+	group := Group{
+		bw:       DRA818_25K,
+		freq_tx:  144.0,
+		freq_rx:  144.0,
+		ctxss_tx: 0x00,
+		squelch:  0x00,
+		ctxss_rx: 0x00,
+	}
+
+	var buffer [12]byte
+	binary.Encode(buffer[:], binary.LittleEndian, group)
+	if n, err := port.Write(p.newCommand(CMD_GROUP, buffer[:])); err != nil || n != len(buffer)+7 {
+		log.Fatalf("Send GROUP: %v (%v/%v)", err, n, len(buffer))
+		return
+	}
+
+	port.Drain()
 
 	fmt.Println("Press Ctrl+C to exit")
 	time.Sleep(60 * time.Second)

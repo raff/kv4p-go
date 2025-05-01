@@ -90,6 +90,8 @@ type CommandProcessor struct {
 	hwver       byte
 	windowSize  int
 
+	smeter int
+
 	hello bool
 	quit  bool
 
@@ -194,8 +196,11 @@ func (p *CommandProcessor) processCommand() {
 			log.Printf("Invalid S-Meter length: %d (%02x)\n", p.plen, p.params)
 			break
 		}
-		smeter := int(p.params[0]) & 0xFF
-		log.Printf("S-Meter: %d\n", smeterValue(smeter))
+		smeter := smeterValue(int(p.params[0]) & 0xFF)
+		if p.smeter != smeter || debug {
+			log.Printf("S-Meter: %d\n", smeterValue(smeter))
+			p.smeter = smeter
+		}
 	case RES_RX_AUDIO:
 		if debug {
 			log.Printf("RX AUDIO (%v bytes):", p.plen)

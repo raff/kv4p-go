@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ebitengine/oto/v3"
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
 	"gopkg.in/hraban/opus.v2"
@@ -80,13 +81,17 @@ type CommandProcessor struct {
 	plen   int
 	params []byte
 
-	hello       bool
 	version     uint16
 	radioStatus byte
 	hwver       byte
 	windowSize  int
 
+	hello bool
+	quit  bool
+
 	audioDecoder *opus.Decoder
+	audioBuffer  []int16
+	player       *oto.Player
 }
 
 func (p *CommandProcessor) processBytes(buf []byte) {
@@ -188,19 +193,25 @@ func (p *CommandProcessor) processCommand() {
 		smeter := int(p.params[0]) & 0xFF
 		log.Printf("S-Meter: %d\n", smeter)
 	case RES_RX_AUDIO:
-		log.Printf("RX AUDIO (%v bytes):", p.plen)
-		h := p.params[0]
-		cn := (h & 0xF8) >> 3
-		s := (h & 0x04) >> 2
-		fc := (h & 0x03)
-		log.Printf("Header: %02x, conf: %d, silk: %d, frame-code: %d\n", h, cn, s, fc)
+		if debug {
+			log.Printf("RX AUDIO (%v bytes):", p.plen)
+			h := p.params[0]
+			cn := (h & 0xF8) >> 3
+			s := (h & 0x04) >> 2
+			fc := (h & 0x03)
+			log.Printf("Header: %02x, conf: %d, silk: %d, frame-code: %d\n", h, cn, s, fc)
+		}
 
 		var out [OPUS_FRAME_SIZE]int16
 		if n, err := p.audioDecoder.Decode(p.params, out[:]); err != nil {
 			log.Printf("Decode: %v\n", err)
 			fmt.Println(toByteArray(p.params))
 		} else {
-			log.Printf("Decoded %d samples\n", n)
+			if debug {
+				log.Printf("Decoded %d samples\n", n)
+			}
+
+			p.audioBuffer = append(p.audioBuffer, out[:n]...)
 		}
 
 	default:
@@ -235,6 +246,35 @@ func (p *CommandProcessor) newCommand(cmd byte, params []byte) []byte {
 	return buffer
 }
 
+// implement io.Reader interface for oto.Player
+func (p *CommandProcessor) Read(buf []byte) (int, error) {
+	if len(p.audioBuffer) == 0 {
+		for i := 0; i < len(buf); i++ {
+			buf[i] = 0
+		}
+
+		return len(buf), nil
+	}
+
+	la := len(p.audioBuffer)
+	lb := la * 2
+
+	if lb > len(buf) {
+		lb = len(buf)
+		la = lb / 2
+	}
+
+	j := 0
+	for i := 0; i < lb; i += 2 {
+		buf[i+0] = byte(p.audioBuffer[j])
+		buf[i+1] = byte(p.audioBuffer[j] >> 8)
+		j++
+	}
+
+	p.audioBuffer = p.audioBuffer[la:]
+	return lb, nil
+}
+
 func toByteArray(b []byte) string {
 	var result strings.Builder
 	result.WriteString("  {\n    ")
@@ -257,6 +297,13 @@ func main() {
 	rts := flag.Bool("rts", false, "Set RTS")
 	wait := flag.Duration("wait", 5*time.Second, "Receive time before exiting")
 	flag.BoolVar(&debug, "debug", debug, "Enable debug output")
+
+	band := flag.String("band", "vhf", "Band (vhf, uhf)")
+	bw := flag.String("bw", "wide", "Bandwidth (wide=25k, narrow=12.5k)")
+	freq := flag.Float64("freq", 162.4, "Frequency in MHz") // NOAA Weather Radio
+	squelch := flag.Int("squelch", 0, "Squelch level (0-255)")
+
+	volume := flag.Float64("volume", 1.0, "Volume (0.0-1.0)")
 	flag.Parse()
 
 	if *dev == "" {
@@ -287,14 +334,14 @@ func main() {
 		}
 	}
 
-	mode := &serial.Mode{
+	smode := &serial.Mode{
 		BaudRate: *baud,
 		DataBits: 8,
 		StopBits: serial.OneStopBit,
 		Parity:   serial.NoParity,
 	}
 
-	port, err := serial.Open(*dev, mode)
+	port, err := serial.Open(*dev, smode)
 	if err != nil {
 		log.Fatalf("Open %v: %v", *dev, err)
 	}
@@ -305,13 +352,29 @@ func main() {
 		log.Fatalf("NewDecoder: %v", err)
 	}
 
+	op := &oto.NewContextOptions{
+		SampleRate:   AUDIO_SAMPLING_RATE,
+		ChannelCount: 1,
+		Format:       oto.FormatSignedInt16LE,
+	}
+	c, ready, err := oto.NewContext(op)
+	if err != nil {
+		log.Fatalf("Audio NewContext: %v", err)
+	}
+	<-ready
+
+	p.player = c.NewPlayer(p)
+
 	defer func() {
+		p.quit = true
+
 		log.Println("Sending STOP command")
 		if _, err := port.Write(p.newCommand(CMD_STOP, nil)); err != nil {
 			log.Fatalf("Send STOP: %v", err)
 			return
 		}
 
+		p.player.Close()
 		port.Drain()
 		port.Close()
 	}()
@@ -321,6 +384,10 @@ func main() {
 		buf := make([]byte, 1024)
 
 		for {
+			if p.quit {
+				break
+			}
+
 			n, err := port.Read(buf)
 			if err == io.EOF {
 				fmt.Println("EOF")
@@ -374,7 +441,11 @@ func main() {
 	time.Sleep(1 * time.Second)
 
 	log.Println("Sending CONFIG command")
-	if _, err := port.Write(p.newCommand(CMD_CONFIG, []byte{MODE_VHF})); err != nil {
+	mode := byte(MODE_VHF)
+	if *band == "uhf" || *freq >= UHF_MIN_FREQ {
+		mode = byte(MODE_UHF)
+	}
+	if _, err := port.Write(p.newCommand(CMD_CONFIG, []byte{mode})); err != nil {
 		log.Fatalf("Send CONFIG: %v", err)
 		return
 	}
@@ -387,13 +458,25 @@ func main() {
 		time.Sleep(1 * time.Second)
 	}
 
+	if *volume < 0.0 {
+		*volume = 0.0
+	} else if *volume > 1.0 {
+		*volume = 1.0
+	}
+	p.player.SetVolume(*volume)
+	p.player.Play()
+
 	log.Println("Sending GROUP command")
+	rbw := DRA818_25K
+	if *bw != "wide" {
+		rbw = DRA818_12K5
+	}
 	group := Group{
-		bw:       DRA818_25K,
-		freq_tx:  144.0,
-		freq_rx:  144.0,
+		bw:       byte(rbw),
+		freq_tx:  float32(*freq),
+		freq_rx:  float32(*freq),
+		squelch:  byte(*squelch),
 		ctxss_tx: 0x00,
-		squelch:  0x00,
 		ctxss_rx: 0x00,
 	}
 

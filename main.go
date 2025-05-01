@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"strings"
 	"time"
 
@@ -191,7 +192,7 @@ func (p *CommandProcessor) processCommand() {
 			break
 		}
 		smeter := int(p.params[0]) & 0xFF
-		log.Printf("S-Meter: %d\n", smeter)
+		log.Printf("S-Meter: %d\n", smeterValue(smeter))
 	case RES_RX_AUDIO:
 		if debug {
 			log.Printf("RX AUDIO (%v bytes):", p.plen)
@@ -275,6 +276,11 @@ func (p *CommandProcessor) Read(buf []byte) (int, error) {
 	return lb, nil
 }
 
+func smeterValue(s255 int) int {
+	result := 9.73*math.Log(0.0297*float64(s255)) - 1.88
+	return max(1, min(9, int(math.Round(result))))
+}
+
 func toByteArray(b []byte) string {
 	var result strings.Builder
 	result.WriteString("  {\n    ")
@@ -295,7 +301,7 @@ func main() {
 	sbreak := flag.Bool("break", false, "Send BREAK signal")
 	dtr := flag.Bool("dtr", false, "Set DTR")
 	rts := flag.Bool("rts", false, "Set RTS")
-	wait := flag.Duration("wait", 5*time.Second, "Receive time before exiting")
+	wait := flag.Duration("wait", 60*time.Second, "Receive time before exiting")
 	flag.BoolVar(&debug, "debug", debug, "Enable debug output")
 
 	band := flag.String("band", "vhf", "Band (vhf, uhf)")

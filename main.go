@@ -8,7 +8,10 @@ import (
 	"io"
 	"log"
 	"math"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ebitengine/oto/v3"
@@ -371,7 +374,7 @@ func main() {
 
 	p.player = c.NewPlayer(p)
 
-	defer func() {
+	shutdown := func() {
 		p.quit = true
 
 		log.Println("Sending STOP command")
@@ -379,10 +382,27 @@ func main() {
 			log.Fatalf("Send STOP: %v", err)
 			return
 		}
+		port.Drain()
+
+		time.Sleep(1 * time.Second)
 
 		p.player.Close()
-		port.Drain()
 		port.Close()
+		os.Exit(0)
+	}
+
+	defer shutdown()
+
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc,
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT)
+	go func() {
+		s := <-sigc
+		log.Println(s)
+		shutdown()
 	}()
 
 	// Read from the serial port

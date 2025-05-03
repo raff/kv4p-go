@@ -599,6 +599,11 @@ func main() {
 		return
 	}
 
+	if err := p.SendFilters(*pre, *high, *low); err != nil {
+		log.Fatalf("Send FILTERS: %v", err)
+		return
+	}
+
 	if *volume < 0 {
 		*volume = 0
 	} else if *volume > 100 {
@@ -638,7 +643,7 @@ func main() {
 		fmt.Println("SCANNING...")
 	freq_loop:
 		for f := min; f <= max; f += step {
-			log.Printf("FREQ: %v", f)
+			log.Printf("FREQ: %3.3f", f)
 			if err := p.SendGroup(rbw, f, f, *squelch); err != nil {
 				log.Fatalf("Send GROUP: %v", err)
 				return
@@ -661,6 +666,7 @@ func main() {
 
 		fmt.Println("SCAN Done")
 	} else {
+		log.Printf("FREQ: %3.3f", *freq)
 		if err := p.SendGroup(rbw, *freq, *freq, *squelch); err != nil {
 			log.Fatalf("Send GROUP: %v", err)
 			return

@@ -411,7 +411,7 @@ func main() {
 	band := flag.String("band", "vhf", "Band (vhf, uhf)")
 	bw := flag.String("bw", "wide", "Bandwidth (wide=25k, narrow=12.5k)")
 	freq := flag.Float64("freq", 162.4, "Frequency in MHz") // NOAA Weather Radio
-	squelch := flag.Int("squelch", 0, "Squelch level (0-255)")
+	squelch := flag.Int("squelch", 0, "Squelch level (0-100)")
 	scan := flag.Bool("scan", false, "Scan selected band")
 
 	volume := flag.Int("volume", 100, "Volume (0-100)")
@@ -583,8 +583,16 @@ func main() {
 		rbw = DRA818_12K5
 	}
 
+	if *squelch < 0 {
+		*squelch = 0
+	} else if *squelch > 100 {
+		*squelch = 100
+	}
+
+	*squelch = 255 * *squelch / 100 // squelch is actually 0-255
+
 	if *scan {
-		var min, max float64
+		var min, max, step float64
 
 		if mode == MODE_VHF {
 			min, max = float64(*freq), float64(VHF_MAX_FREQ)
@@ -592,9 +600,15 @@ func main() {
 			min, max = float64(*freq), float64(UHF_MAX_FREQ)
 		}
 
+		if rbw == DRA818_25K {
+			step = 0.025
+		} else {
+			step = 0.0125
+		}
+
 		fmt.Println("SCANNING...")
 	freq_loop:
-		for f := min; f <= max; f += 0.01 {
+		for f := min; f <= max; f += step {
 			log.Printf("FREQ: %v", f)
 			if err := p.SendGroup(rbw, f, f, *squelch); err != nil {
 				log.Fatalf("Send GROUP: %v", err)
@@ -603,8 +617,11 @@ func main() {
 
 			start := p.scount
 
-			for p.scount < start+10 {
-				log.Printf("...%v (%v)", p.scount-start, p.smeter)
+			for p.scount < start+20 {
+				if debug {
+					log.Printf("...%v (%v)", p.scount-start, p.smeter)
+				}
+
 				if p.smeter > 3 {
 					break freq_loop
 				}

@@ -95,6 +95,8 @@ type CommandProcessor struct {
 	hello bool
 	quit  bool
 
+	port serial.Port
+
 	audioDecoder *opus.Decoder
 	audioBuffer  []int16
 	player       *oto.Player
@@ -171,7 +173,7 @@ func (p *CommandProcessor) processCommand() {
 	case RES_PHYS_PTT_UP:
 		log.Println("PTT BUTTON UP")
 	case RES_HELLO:
-		log.Printf("HELLO: %s\n", p.params)
+		log.Printf("HELLO\n")
 		p.hello = true
 	case RES_VERSION:
 		if p.plen != 8 {
@@ -253,6 +255,61 @@ func (p *CommandProcessor) newCommand(cmd byte, params []byte) []byte {
 	}
 	p.windowSize -= l
 	return buffer
+}
+
+func (p *CommandProcessor) Start() {
+	// Read from the serial port
+	go func() {
+		buf := make([]byte, 1024)
+
+		for {
+			if p.quit {
+				break
+			}
+
+			n, err := p.port.Read(buf)
+			if err == io.EOF {
+				fmt.Println("EOF")
+				break
+			}
+			if p.quit {
+				break
+			}
+			if err != nil {
+				log.Fatal("Error reading from serial port:", err)
+				break
+			}
+
+			go p.processBytes(buf[:n])
+		}
+	}()
+}
+
+func (p *CommandProcessor) Stop() {
+	p.quit = true
+
+	log.Println("Sending STOP command")
+	if _, err := p.port.Write(p.newCommand(CMD_STOP, nil)); err != nil {
+		log.Fatalf("Send STOP: %v", err)
+		return
+	}
+	p.port.Drain()
+
+	time.Sleep(1 * time.Second)
+
+	p.player.Close()
+	p.port.Close()
+}
+
+func (p *CommandProcessor) Reset() {
+	p.port.SetDTR(false)
+	p.port.SetRTS(true)
+	time.Sleep(100 * time.Millisecond)
+	p.port.SetDTR(true)
+	p.port.SetRTS(false)
+	time.Sleep(100 * time.Millisecond)
+	p.port.SetDTR(false)
+	p.port.SetRTS(true)
 }
 
 // implement io.Reader interface for oto.Player
@@ -360,7 +417,7 @@ func main() {
 		log.Fatalf("Open %v: %v", *dev, err)
 	}
 
-	p := &CommandProcessor{windowSize: 1024}
+	p := &CommandProcessor{windowSize: 1024, port: port}
 	p.audioDecoder, err = opus.NewDecoder(AUDIO_SAMPLING_RATE, 1)
 	if err != nil {
 		log.Fatalf("NewDecoder: %v", err)
@@ -380,19 +437,7 @@ func main() {
 	p.player = c.NewPlayer(p)
 
 	shutdown := func() {
-		p.quit = true
-
-		log.Println("Sending STOP command")
-		if _, err := port.Write(p.newCommand(CMD_STOP, nil)); err != nil {
-			log.Fatalf("Send STOP: %v", err)
-			return
-		}
-		port.Drain()
-
-		time.Sleep(1 * time.Second)
-
-		p.player.Close()
-		port.Close()
+		p.Stop()
 		os.Exit(0)
 	}
 
@@ -410,38 +455,17 @@ func main() {
 		shutdown()
 	}()
 
-	// Read from the serial port
-	go func() {
-		buf := make([]byte, 1024)
-
-		for {
-			if p.quit {
-				break
-			}
-
-			n, err := port.Read(buf)
-			if err == io.EOF {
-				fmt.Println("EOF")
-				break
-			}
-			if err != nil {
-				log.Fatal("Error reading from serial port:", err)
-				break
-			}
-
-			go p.processBytes(buf[:n])
-		}
-	}()
+	p.Start()
 
 	if *dtr {
 		log.Println("Set DTR")
-		if err := port.SetDTR(true); err != nil {
+		if err := p.port.SetDTR(true); err != nil {
 			log.Fatalf("SetDTR: %v", err)
 		}
 	}
 	if *rts {
 		log.Println("Set RTS")
-		if err := port.SetRTS(true); err != nil {
+		if err := p.port.SetRTS(true); err != nil {
 			log.Fatalf("SetRTS: %v", err)
 		}
 	}
@@ -452,9 +476,20 @@ func main() {
 	}
 
 	// Wait for HELLO message
-	for i := 0; i < 10 && !p.hello; i++ {
-		log.Println("Waiting for HELLO message...")
-		time.Sleep(1 * time.Second)
+	for i := 0; i < 2; i++ {
+		if p.hello {
+			break
+		}
+
+		if i > 0 {
+			log.Println("Reset board")
+			p.Reset()
+		}
+
+		for j := 0; j < 20 && !p.hello; j++ {
+			log.Println("Waiting for HELLO message...")
+			time.Sleep(1 * time.Second)
+		}
 	}
 
 	if !p.hello {
@@ -463,7 +498,7 @@ func main() {
 	}
 
 	log.Println("Sending STOP command")
-	if _, err := port.Write(p.newCommand(CMD_STOP, nil)); err != nil {
+	if _, err := p.port.Write(p.newCommand(CMD_STOP, nil)); err != nil {
 		log.Fatalf("Send STOP: %v", err)
 		return
 	}
@@ -476,7 +511,7 @@ func main() {
 	if *band == "uhf" || *freq >= UHF_MIN_FREQ {
 		mode = byte(MODE_UHF)
 	}
-	if _, err := port.Write(p.newCommand(CMD_CONFIG, []byte{mode})); err != nil {
+	if _, err := p.port.Write(p.newCommand(CMD_CONFIG, []byte{mode})); err != nil {
 		log.Fatalf("Send CONFIG: %v", err)
 		return
 	}
@@ -487,6 +522,11 @@ func main() {
 	for i := 0; i < 10 && p.version == 0; i++ {
 		log.Println("Waiting for VERSION message...")
 		time.Sleep(1 * time.Second)
+	}
+
+	if p.version == 0 {
+		log.Println("No VERSION message received")
+		return
 	}
 
 	if *volume < 0.0 {
@@ -513,7 +553,7 @@ func main() {
 
 	var buffer [12]byte
 	binary.Encode(buffer[:], binary.LittleEndian, group)
-	if n, err := port.Write(p.newCommand(CMD_GROUP, buffer[:])); err != nil || n != len(buffer)+7 {
+	if n, err := p.port.Write(p.newCommand(CMD_GROUP, buffer[:])); err != nil || n != len(buffer)+7 {
 		log.Fatalf("Send GROUP: %v (%v/%v)", err, n, len(buffer))
 		return
 	}

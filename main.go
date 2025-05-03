@@ -61,6 +61,10 @@ const (
 	DRA818_25K  = 0x01
 	DRA818_12K5 = 0x00
 
+	FILTERS_PRE  = 0x01
+	FILTERS_HIGH = 0x02
+	FILTERS_LOW  = 0x04
+
 	VHF_MIN_FREQ = 134.0 // SA818U lower limit, in MHz
 	VHF_MAX_FREQ = 174.0 // SA818U upper limit, in MHz
 	UHF_MIN_FREQ = 400.0 // SA818U lower limit, in MHz
@@ -308,6 +312,28 @@ func (p *CommandProcessor) SendConfig(mode int) error {
 	return nil
 }
 
+func (p *CommandProcessor) SendFilters(pre, high, low bool) error {
+	var filters byte
+
+	if pre {
+		filters |= FILTERS_PRE
+	}
+	if high {
+		filters |= FILTERS_HIGH
+	}
+	if low {
+		filters |= FILTERS_LOW
+	}
+
+	log.Println("Sending FILTERS command")
+	if _, err := p.port.Write(p.newCommand(CMD_FILTERS, []byte{byte(filters)})); err != nil {
+		return err
+	}
+
+	p.port.Drain()
+	return nil
+}
+
 func (p *CommandProcessor) SendGroup(bw int, txfreq, rxfreq float64, squelch int) error {
 	log.Println("Sending GROUP command")
 	group := Group{
@@ -412,6 +438,9 @@ func main() {
 	bw := flag.String("bw", "wide", "Bandwidth (wide=25k, narrow=12.5k)")
 	freq := flag.Float64("freq", 162.4, "Frequency in MHz") // NOAA Weather Radio
 	squelch := flag.Int("squelch", 0, "Squelch level (0-100)")
+	pre := flag.Bool("pre", false, "pre-emphasis filter")
+	high := flag.Bool("high", true, "high-pass filter")
+	low := flag.Bool("low", true, "low-pass filter")
 	scan := flag.Bool("scan", false, "Scan selected band")
 
 	volume := flag.Int("volume", 100, "Volume (0-100)")

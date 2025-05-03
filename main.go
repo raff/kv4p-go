@@ -91,6 +91,7 @@ type CommandProcessor struct {
 	windowSize  int
 
 	smeter int
+	scount int
 
 	hello bool
 	quit  bool
@@ -199,8 +200,9 @@ func (p *CommandProcessor) processCommand() {
 			break
 		}
 		smeter := smeterValue(int(p.params[0]) & 0xFF)
+		p.scount++
 		if p.smeter != smeter || debug {
-			log.Printf("S-Meter: %d\n", smeterValue(smeter))
+			log.Printf("S-Meter: %d\n", smeter)
 			p.smeter = smeter
 		}
 	case RES_RX_AUDIO:
@@ -285,17 +287,54 @@ func (p *CommandProcessor) Start() {
 	}()
 }
 
+func (p *CommandProcessor) SendStop() error {
+	log.Println("Sending STOP command")
+	if _, err := p.port.Write(p.newCommand(CMD_STOP, nil)); err != nil {
+		return err
+	}
+
+	p.port.Drain()
+	time.Sleep(1 * time.Second)
+	return nil
+}
+
+func (p *CommandProcessor) SendConfig(mode int) error {
+	log.Println("Sending CONFIG command")
+	if _, err := p.port.Write(p.newCommand(CMD_CONFIG, []byte{byte(mode)})); err != nil {
+		return err
+	}
+
+	p.port.Drain()
+	return nil
+}
+
+func (p *CommandProcessor) SendGroup(bw int, txfreq, rxfreq float64, squelch int) error {
+	log.Println("Sending GROUP command")
+	group := Group{
+		bw:       byte(bw),
+		freq_tx:  float32(txfreq),
+		freq_rx:  float32(rxfreq),
+		squelch:  byte(squelch),
+		ctxss_tx: 0x00,
+		ctxss_rx: 0x00,
+	}
+
+	var buffer [12]byte
+	binary.Encode(buffer[:], binary.LittleEndian, group)
+	if n, err := p.port.Write(p.newCommand(CMD_GROUP, buffer[:])); err != nil || n != len(buffer)+7 {
+		return err
+	}
+
+	p.port.Drain()
+	return nil
+}
+
 func (p *CommandProcessor) Stop() {
 	p.quit = true
 
-	log.Println("Sending STOP command")
-	if _, err := p.port.Write(p.newCommand(CMD_STOP, nil)); err != nil {
-		log.Fatalf("Send STOP: %v", err)
-		return
+	if err := p.SendStop(); err != nil {
+		log.Printf("Send STOP: %v", err)
 	}
-	p.port.Drain()
-
-	time.Sleep(1 * time.Second)
 
 	p.player.Close()
 	p.port.Close()
@@ -373,8 +412,9 @@ func main() {
 	bw := flag.String("bw", "wide", "Bandwidth (wide=25k, narrow=12.5k)")
 	freq := flag.Float64("freq", 162.4, "Frequency in MHz") // NOAA Weather Radio
 	squelch := flag.Int("squelch", 0, "Squelch level (0-255)")
+	scan := flag.Bool("scan", false, "Scan selected band")
 
-	volume := flag.Float64("volume", 1.0, "Volume (0.0-1.0)")
+	volume := flag.Int("volume", 100, "Volume (0-100)")
 	flag.Parse()
 
 	if *dev == "" {
@@ -486,7 +526,7 @@ func main() {
 			p.Reset()
 		}
 
-		for j := 0; j < 20 && !p.hello; j++ {
+		for j := 0; j < 10 && !p.hello; j++ {
 			log.Println("Waiting for HELLO message...")
 			time.Sleep(1 * time.Second)
 		}
@@ -497,26 +537,27 @@ func main() {
 		return
 	}
 
-	log.Println("Sending STOP command")
-	if _, err := p.port.Write(p.newCommand(CMD_STOP, nil)); err != nil {
+	if err := p.SendStop(); err != nil {
 		log.Fatalf("Send STOP: %v", err)
 		return
 	}
 
-	port.Drain()
-	time.Sleep(1 * time.Second)
-
-	log.Println("Sending CONFIG command")
-	mode := byte(MODE_VHF)
-	if *band == "uhf" || *freq >= UHF_MIN_FREQ {
-		mode = byte(MODE_UHF)
+	if *freq < VHF_MIN_FREQ {
+		*freq = VHF_MIN_FREQ
+	} else if *freq > VHF_MAX_FREQ && *freq < UHF_MIN_FREQ {
+		*freq = VHF_MAX_FREQ
+	} else if *freq > UHF_MAX_FREQ {
+		*freq = UHF_MAX_FREQ
 	}
-	if _, err := p.port.Write(p.newCommand(CMD_CONFIG, []byte{mode})); err != nil {
+
+	mode := MODE_VHF
+	if *band == "uhf" || *freq >= UHF_MIN_FREQ {
+		mode = MODE_UHF
+	}
+	if err := p.SendConfig(mode); err != nil {
 		log.Fatalf("Send CONFIG: %v", err)
 		return
 	}
-
-	port.Drain()
 
 	// Wait for VERSION message
 	for i := 0; i < 10 && p.version == 0; i++ {
@@ -529,36 +570,56 @@ func main() {
 		return
 	}
 
-	if *volume < 0.0 {
-		*volume = 0.0
-	} else if *volume > 1.0 {
-		*volume = 1.0
+	if *volume < 0 {
+		*volume = 0
+	} else if *volume > 100 {
+		*volume = 100
 	}
-	p.player.SetVolume(*volume)
+	p.player.SetVolume(float64(*volume) / 100)
 	p.player.Play()
 
-	log.Println("Sending GROUP command")
 	rbw := DRA818_25K
 	if *bw != "wide" {
 		rbw = DRA818_12K5
 	}
-	group := Group{
-		bw:       byte(rbw),
-		freq_tx:  float32(*freq),
-		freq_rx:  float32(*freq),
-		squelch:  byte(*squelch),
-		ctxss_tx: 0x00,
-		ctxss_rx: 0x00,
-	}
 
-	var buffer [12]byte
-	binary.Encode(buffer[:], binary.LittleEndian, group)
-	if n, err := p.port.Write(p.newCommand(CMD_GROUP, buffer[:])); err != nil || n != len(buffer)+7 {
-		log.Fatalf("Send GROUP: %v (%v/%v)", err, n, len(buffer))
-		return
-	}
+	if *scan {
+		var min, max float64
 
-	port.Drain()
+		if mode == MODE_VHF {
+			min, max = float64(*freq), float64(VHF_MAX_FREQ)
+		} else {
+			min, max = float64(*freq), float64(UHF_MAX_FREQ)
+		}
+
+		fmt.Println("SCANNING...")
+	freq_loop:
+		for f := min; f <= max; f += 0.01 {
+			log.Printf("FREQ: %v", f)
+			if err := p.SendGroup(rbw, f, f, *squelch); err != nil {
+				log.Fatalf("Send GROUP: %v", err)
+				return
+			}
+
+			start := p.scount
+
+			for p.scount < start+10 {
+				log.Printf("...%v (%v)", p.scount-start, p.smeter)
+				if p.smeter > 3 {
+					break freq_loop
+				}
+
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+
+		fmt.Println("SCAN Done")
+	} else {
+		if err := p.SendGroup(rbw, *freq, *freq, *squelch); err != nil {
+			log.Fatalf("Send GROUP: %v", err)
+			return
+		}
+	}
 
 	fmt.Println("Press Ctrl+C to exit")
 	time.Sleep(*wait)

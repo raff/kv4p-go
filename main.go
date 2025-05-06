@@ -431,6 +431,7 @@ func main() {
 	sbreak := flag.Bool("break", false, "Send BREAK signal")
 	dtr := flag.Bool("dtr", false, "Set DTR")
 	rts := flag.Bool("rts", false, "Set RTS")
+	reset := flag.Bool("reset", false, "Reset board")
 	wait := flag.Duration("wait", 60*time.Second, "Receive time before exiting")
 	flag.BoolVar(&debug, "debug", debug, "Enable debug output")
 
@@ -525,6 +526,12 @@ func main() {
 	}()
 
 	p.Start()
+
+	if *reset {
+		log.Println("Resetting board")
+		p.Reset()
+		time.Sleep(1 * time.Second)
+	}
 
 	if *dtr {
 		log.Println("Set DTR")

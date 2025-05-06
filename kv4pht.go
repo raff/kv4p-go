@@ -1,17 +1,13 @@
-package main
+package kv4pht
 
 import (
 	"encoding/binary"
 	"encoding/hex"
-	"flag"
 	"fmt"
 	"io"
 	"log"
 	"math"
-	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/ebitengine/oto/v3"
@@ -27,7 +23,9 @@ var (
 	esp32_product_ids = []string{"EA60", "7523"}
 
 	cmd_prefix = []byte{0xDE, 0xAD, 0xBE, 0xEF}
-	debug      = false
+	Debug      = false
+
+	ErrNoDevice = fmt.Errorf("No device found")
 )
 
 const (
@@ -107,6 +105,18 @@ type CommandProcessor struct {
 	player       *oto.Player
 }
 
+func (p *CommandProcessor) Hello() bool {
+	return p.hello
+}
+
+func (p *CommandProcessor) Version() (uint16, byte, byte) {
+	return p.version, p.radioStatus, p.hwver
+}
+
+func (p *CommandProcessor) SMeter() (int, int) {
+	return p.smeter, p.scount
+}
+
 func (p *CommandProcessor) processBytes(buf []byte) {
 	for _, b := range buf {
 		switch {
@@ -158,7 +168,7 @@ func (p *CommandProcessor) processBytes(buf []byte) {
 }
 
 func (p *CommandProcessor) processCommand() {
-	if debug {
+	if Debug {
 		log.Println("processCommand", p.cmd, p.plen) //, p.params)
 	}
 
@@ -205,12 +215,12 @@ func (p *CommandProcessor) processCommand() {
 		}
 		smeter := smeterValue(int(p.params[0]) & 0xFF)
 		p.scount++
-		if p.smeter != smeter || debug {
+		if p.smeter != smeter || Debug {
 			log.Printf("S-Meter: %d\n", smeter)
 			p.smeter = smeter
 		}
 	case RES_RX_AUDIO:
-		if debug {
+		if Debug {
 			log.Printf("RX AUDIO (%v bytes):", p.plen)
 			h := p.params[0]
 			cn := (h & 0xF8) >> 3
@@ -221,10 +231,9 @@ func (p *CommandProcessor) processCommand() {
 
 		var out [OPUS_FRAME_SIZE]int16
 		if n, err := p.audioDecoder.Decode(p.params, out[:]); err != nil {
-			log.Printf("Decode: %v\n", err)
-			fmt.Println(toByteArray(p.params))
+			log.Printf("Decode: %v\n%v", err, toByteArray(p.params))
 		} else {
-			if debug {
+			if Debug {
 				log.Printf("Decoded %d samples\n", n)
 			}
 
@@ -232,7 +241,7 @@ func (p *CommandProcessor) processCommand() {
 		}
 
 	default:
-		fmt.Printf("Unknown command %02x: %02x\n", p.cmd, p.params)
+		log.Printf("Unknown command %02x: %02x\n", p.cmd, p.params)
 	}
 
 	p.state = 0
@@ -251,7 +260,7 @@ func (p *CommandProcessor) newCommand(cmd byte, params []byte) []byte {
 		copy(buffer[7:], params)
 	}
 
-	if debug {
+	if Debug {
 		log.Printf("newCommand %02x: %02x\n", cmd, buffer)
 	}
 	l = len(buffer)
@@ -263,7 +272,65 @@ func (p *CommandProcessor) newCommand(cmd byte, params []byte) []byte {
 	return buffer
 }
 
-func (p *CommandProcessor) Start() {
+func Start(portName string) (*CommandProcessor, error) {
+	if portName == "" {
+		ports, err := enumerator.GetDetailedPortsList()
+		if err != nil {
+			return nil, err
+		}
+
+		for _, port := range ports {
+			if port.IsUSB {
+				for i, id := range esp32_vendor_ids {
+					if port.VID == id && port.PID == esp32_product_ids[i] {
+						portName = port.Name
+						if Debug {
+							log.Printf("Found ESP32 device: %s\n", port.Name)
+						}
+						break
+					}
+				}
+			}
+		}
+
+		if portName == "" {
+			return nil, ErrNoDevice
+		}
+	}
+
+	smode := &serial.Mode{
+		BaudRate: 115200,
+		DataBits: 8,
+		StopBits: serial.OneStopBit,
+		Parity:   serial.NoParity,
+	}
+
+	port, err := serial.Open(portName, smode)
+	if err != nil {
+		return nil, err
+	}
+
+	p := &CommandProcessor{windowSize: 1024, port: port}
+	p.audioDecoder, err = opus.NewDecoder(AUDIO_SAMPLING_RATE, 1)
+	if err != nil {
+		port.Close()
+		return nil, err
+	}
+
+	op := &oto.NewContextOptions{
+		SampleRate:   AUDIO_SAMPLING_RATE,
+		ChannelCount: 1,
+		Format:       oto.FormatSignedInt16LE,
+	}
+	c, ready, err := oto.NewContext(op)
+	if err != nil {
+		port.Close()
+		return nil, err
+	}
+	<-ready
+
+	p.player = c.NewPlayer(p)
+
 	// Read from the serial port
 	go func() {
 		buf := make([]byte, 1024)
@@ -274,11 +341,7 @@ func (p *CommandProcessor) Start() {
 			}
 
 			n, err := p.port.Read(buf)
-			if err == io.EOF {
-				fmt.Println("EOF")
-				break
-			}
-			if p.quit {
+			if err == io.EOF || p.quit {
 				break
 			}
 			if err != nil {
@@ -289,6 +352,8 @@ func (p *CommandProcessor) Start() {
 			go p.processBytes(buf[:n])
 		}
 	}()
+
+	return p, nil
 }
 
 func (p *CommandProcessor) SendStop() error {
@@ -406,6 +471,17 @@ func (p *CommandProcessor) Read(buf []byte) (int, error) {
 	return lb, nil
 }
 
+func (p *CommandProcessor) SetVolume(volume float64) {
+	if p.player != nil {
+		p.player.SetVolume(volume)
+		if volume > 0 {
+			p.player.Play()
+		} else {
+			p.player.Pause()
+		}
+	}
+}
+
 func smeterValue(s255 int) int {
 	result := 9.73*math.Log(0.0297*float64(s255)) - 1.88
 	return max(1, min(9, int(math.Round(result))))
@@ -423,263 +499,4 @@ func toByteArray(b []byte) string {
 	}
 	result.WriteString("\n  },")
 	return result.String()
-}
-
-func main() {
-	dev := flag.String("dev", "", "Serial device to use (e.g. /dev/ttyUSB0)")
-	baud := flag.Int("baud", 115200, "Baud rate")
-	sbreak := flag.Bool("break", false, "Send BREAK signal")
-	dtr := flag.Bool("dtr", false, "Set DTR")
-	rts := flag.Bool("rts", false, "Set RTS")
-	reset := flag.Bool("reset", false, "Reset board")
-	wait := flag.Duration("wait", 60*time.Second, "Receive time before exiting")
-	flag.BoolVar(&debug, "debug", debug, "Enable debug output")
-
-	band := flag.String("band", "vhf", "Band (vhf, uhf)")
-	bw := flag.String("bw", "wide", "Bandwidth (wide=25k, narrow=12.5k)")
-	freq := flag.Float64("freq", 162.4, "Frequency in MHz") // NOAA Weather Radio
-	squelch := flag.Int("squelch", 0, "Squelch level (0-100)")
-	pre := flag.Bool("pre", false, "pre-emphasis filter")
-	high := flag.Bool("high", true, "high-pass filter")
-	low := flag.Bool("low", true, "low-pass filter")
-	scan := flag.Bool("scan", false, "Scan selected band")
-
-	volume := flag.Int("volume", 100, "Volume (0-100)")
-	flag.Parse()
-
-	if *dev == "" {
-		ports, err := enumerator.GetDetailedPortsList()
-		if err != nil {
-			log.Fatalf("GetPorts: %v", err)
-		}
-		if len(ports) == 0 {
-			fmt.Println("No serial ports found!")
-			return
-		}
-
-		for _, port := range ports {
-			if port.IsUSB {
-				for i, id := range esp32_vendor_ids {
-					if port.VID == id && port.PID == esp32_product_ids[i] {
-						*dev = port.Name
-						fmt.Printf("Found ESP32 device: %s\n", port.Name)
-						break
-					}
-				}
-			}
-		}
-
-		if *dev == "" {
-			fmt.Println("No ESP32 device found!")
-			return
-		}
-	}
-
-	smode := &serial.Mode{
-		BaudRate: *baud,
-		DataBits: 8,
-		StopBits: serial.OneStopBit,
-		Parity:   serial.NoParity,
-	}
-
-	port, err := serial.Open(*dev, smode)
-	if err != nil {
-		log.Fatalf("Open %v: %v", *dev, err)
-	}
-
-	p := &CommandProcessor{windowSize: 1024, port: port}
-	p.audioDecoder, err = opus.NewDecoder(AUDIO_SAMPLING_RATE, 1)
-	if err != nil {
-		log.Fatalf("NewDecoder: %v", err)
-	}
-
-	op := &oto.NewContextOptions{
-		SampleRate:   AUDIO_SAMPLING_RATE,
-		ChannelCount: 1,
-		Format:       oto.FormatSignedInt16LE,
-	}
-	c, ready, err := oto.NewContext(op)
-	if err != nil {
-		log.Fatalf("Audio NewContext: %v", err)
-	}
-	<-ready
-
-	p.player = c.NewPlayer(p)
-
-	shutdown := func() {
-		p.Stop()
-		os.Exit(0)
-	}
-
-	defer shutdown()
-
-	sigc := make(chan os.Signal, 1)
-	signal.Notify(sigc,
-		syscall.SIGHUP,
-		syscall.SIGINT,
-		syscall.SIGTERM,
-		syscall.SIGQUIT)
-	go func() {
-		s := <-sigc
-		log.Println(s)
-		shutdown()
-	}()
-
-	p.Start()
-
-	if *reset {
-		log.Println("Resetting board")
-		p.Reset()
-		time.Sleep(1 * time.Second)
-	}
-
-	if *dtr {
-		log.Println("Set DTR")
-		if err := p.port.SetDTR(true); err != nil {
-			log.Fatalf("SetDTR: %v", err)
-		}
-	}
-	if *rts {
-		log.Println("Set RTS")
-		if err := p.port.SetRTS(true); err != nil {
-			log.Fatalf("SetRTS: %v", err)
-		}
-	}
-
-	if *sbreak {
-		log.Println("Sending BREAK")
-		port.Break(10 * time.Millisecond)
-	}
-
-	// Wait for HELLO message
-	for i := 0; i < 2; i++ {
-		if p.hello {
-			break
-		}
-
-		if i > 0 {
-			log.Println("Reset board")
-			p.Reset()
-		}
-
-		for j := 0; j < 10 && !p.hello; j++ {
-			log.Println("Waiting for HELLO message...")
-			time.Sleep(1 * time.Second)
-		}
-	}
-
-	if !p.hello {
-		log.Println("No HELLO message received")
-		return
-	}
-
-	if err := p.SendStop(); err != nil {
-		log.Fatalf("Send STOP: %v", err)
-		return
-	}
-
-	if *freq < VHF_MIN_FREQ {
-		*freq = VHF_MIN_FREQ
-	} else if *freq > VHF_MAX_FREQ && *freq < UHF_MIN_FREQ {
-		*freq = VHF_MAX_FREQ
-	} else if *freq > UHF_MAX_FREQ {
-		*freq = UHF_MAX_FREQ
-	}
-
-	mode := MODE_VHF
-	if *band == "uhf" || *freq >= UHF_MIN_FREQ {
-		mode = MODE_UHF
-	}
-	if err := p.SendConfig(mode); err != nil {
-		log.Fatalf("Send CONFIG: %v", err)
-		return
-	}
-
-	// Wait for VERSION message
-	for i := 0; i < 10 && p.version == 0; i++ {
-		log.Println("Waiting for VERSION message...")
-		time.Sleep(1 * time.Second)
-	}
-
-	if p.version == 0 {
-		log.Println("No VERSION message received")
-		return
-	}
-
-	if err := p.SendFilters(*pre, *high, *low); err != nil {
-		log.Fatalf("Send FILTERS: %v", err)
-		return
-	}
-
-	if *volume < 0 {
-		*volume = 0
-	} else if *volume > 100 {
-		*volume = 100
-	}
-	p.player.SetVolume(float64(*volume) / 100)
-	p.player.Play()
-
-	rbw := DRA818_25K
-	if *bw != "wide" {
-		rbw = DRA818_12K5
-	}
-
-	if *squelch < 0 {
-		*squelch = 0
-	} else if *squelch > 100 {
-		*squelch = 100
-	}
-
-	*squelch = 255 * *squelch / 100 // squelch is actually 0-255
-
-	if *scan {
-		var min, max, step float64
-
-		if mode == MODE_VHF {
-			min, max = float64(*freq), float64(VHF_MAX_FREQ)
-		} else {
-			min, max = float64(*freq), float64(UHF_MAX_FREQ)
-		}
-
-		if rbw == DRA818_25K {
-			step = 0.025
-		} else {
-			step = 0.0125
-		}
-
-		fmt.Println("SCANNING...")
-	freq_loop:
-		for f := min; f <= max; f += step {
-			log.Printf("FREQ: %3.3f", f)
-			if err := p.SendGroup(rbw, f, f, *squelch); err != nil {
-				log.Fatalf("Send GROUP: %v", err)
-				return
-			}
-
-			start := p.scount
-
-			for p.scount < start+20 {
-				if debug {
-					log.Printf("...%v (%v)", p.scount-start, p.smeter)
-				}
-
-				if p.smeter > 3 {
-					break freq_loop
-				}
-
-				time.Sleep(100 * time.Millisecond)
-			}
-		}
-
-		fmt.Println("SCAN Done")
-	} else {
-		log.Printf("FREQ: %3.3f", *freq)
-		if err := p.SendGroup(rbw, *freq, *freq, *squelch); err != nil {
-			log.Fatalf("Send GROUP: %v", err)
-			return
-		}
-	}
-
-	fmt.Println("Press Ctrl+C to exit")
-	time.Sleep(*wait)
 }

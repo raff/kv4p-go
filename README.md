@@ -14,22 +14,14 @@ Since the official client is only available for Android devices, this is an atte
 
 ## Usage
 
-    go run main.go [options]
+    go run cmd/kv4pht/main.go [options]
 
 where options are:
 
     // serial port
-    -baud int
-    	Baud rate (default 115200)
-    -break
-    	Send BREAK signal
     -dev string
     	Serial device to use (e.g. /dev/ttyUSB0).
       Leave empty to find a serial port with an ESP32 device.
-    -dtr
-    	Set DTR
-    -rts
-    	Set RTS
 
     // general
     -debug
@@ -42,9 +34,19 @@ where options are:
     	Bandwidth (wide=25k, narrow=12.5k) (default "wide")
     -freq float
     	Frequency in MHz (default 162.4) // San Francisco Bay NOAA Weather channel
+    -high
+    	high-pass filter (default true)
+    -low
+    	low-pass filter (default true)
+    -pre
+    	pre-emphasis filter
+    -reset
+    	Reset board
+    -scan
+    	Scan selected band
     -squelch int
-    	Squelch level (0-255)
-    -volume float
-    	Volume (0.0-1.0) (default 1)
+    	Squelch level (0-100)
+    -volume int
+    	Volume (0-100) (default 100)
     -wait duration
     	Receive time before exiting (default 1m0s)

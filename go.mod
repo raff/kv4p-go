@@ -1,4 +1,4 @@
-module kv4p-go
+module github.com/raff/kv4p-go
 
 go 1.24.2
 

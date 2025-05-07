@@ -9,7 +9,6 @@ import (
 	"math/rand"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/examples/resources/fonts"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
@@ -49,24 +48,23 @@ func maxCounter(index int) int {
 }
 
 type Game struct {
-	vertices []ebiten.Vertex
-	indices  []uint16
-
 	samples [1920]int16
 
 	numberInput *NumberInput
+	waveform    *Waveform
 }
 
 type NumberInput struct {
-	value       int
-	minValue    int
-	maxValue    int
-	maxDigits   int
 	position    image.Point
 	ddimensions image.Point
-	focused     bool
-	editing     bool
-	cursor      int
+
+	value     int
+	minValue  int
+	maxValue  int
+	maxDigits int
+	focused   bool
+	editing   bool
+	cursor    int
 }
 
 func NewNumberInput(minValue, maxValue int, x, y int) *NumberInput {
@@ -80,17 +78,18 @@ func NewNumberInput(minValue, maxValue int, x, y int) *NumberInput {
 	dh = m.HLineGap + m.HAscent + m.HDescent + m.HLineGap
 
 	return &NumberInput{
-		value:       minValue,
-		minValue:    minValue,
-		maxValue:    maxValue,
-		maxDigits:   maxDigits,
 		position:    image.Point{x, y},
-		ddimensions: image.Point{int(dw), int(dh + 0)},
+		ddimensions: image.Point{int(dw), int(dh)},
+
+		value:     minValue,
+		minValue:  minValue,
+		maxValue:  maxValue,
+		maxDigits: maxDigits,
 	}
 }
 
-func (n *NumberInput) Size() (int, int) {
-	return n.ddimensions.X * n.maxDigits, n.ddimensions.Y
+func (n *NumberInput) Size() (float32, float32) {
+	return float32(n.ddimensions.X * n.maxDigits), float32(n.ddimensions.Y)
 }
 
 func (n *NumberInput) Update() {
@@ -167,6 +166,28 @@ func (n *NumberInput) Update() {
 				if n.cursor < n.maxDigits {
 					n.cursor++
 				}
+			} else if inpututil.IsKeyJustPressed(ebiten.KeyUp) {
+				// Calculate the multiplier based on cursor position
+				multiplier := 1
+				for i := 0; i < n.maxDigits-1-n.cursor; i++ {
+					multiplier *= 10
+				}
+				n.value += multiplier
+				// Ensure value stays positive and within bounds
+				if n.value >= n.maxValue {
+					n.value = n.maxValue
+				}
+			} else if inpututil.IsKeyJustPressed(ebiten.KeyDown) {
+				// Calculate the multiplier based on cursor position
+				multiplier := 1
+				for i := 0; i < n.maxDigits-1-n.cursor; i++ {
+					multiplier *= 10
+				}
+				n.value -= multiplier
+				// Ensure value stays positive and within bounds
+				if n.value < n.minValue {
+					n.value = n.minValue
+				}
 			}
 		}
 	}
@@ -180,7 +201,6 @@ func (n *NumberInput) Draw(screen *ebiten.Image) {
 	str := fmt.Sprintf(fmt.Sprintf("%%0%dd", n.maxDigits), n.value)
 	for i, ch := range str {
 		x := n.position.X + i*n.ddimensions.X
-		//ebitenutil.DebugPrintAt(screen, string(ch), x+5, n.position.Y+8)
 
 		op := &text.DrawOptions{}
 		op.GeoM.Translate(float64(x+4), float64(n.position.Y+4))
@@ -195,17 +215,38 @@ func (n *NumberInput) Draw(screen *ebiten.Image) {
 	}
 }
 
-func (g *Game) drawWave(screen *ebiten.Image, bounds image.Rectangle, samples []int16) {
-	var path vector.Path
+type Waveform struct {
+	vertices []ebiten.Vertex
+	indices  []uint16
 
-	wx, wy := float32(bounds.Min.X), float32(bounds.Min.Y)
-	ww, wh := float32(bounds.Dx()), float32(bounds.Dy())
+	x, y, w, h float32
+}
+
+func NewWaveform(x, y, w, h float32) *Waveform {
+	return &Waveform{
+		x: x, y: y, w: w, h: h,
+	}
+}
+
+func (w *Waveform) Draw(screen *ebiten.Image) {
+	// Draw the waveform
+	vector.DrawFilledRect(screen, w.x, w.y, w.w, w.h, color.RGBA{0x33, 0x33, 0x33, 0xff}, false) // anti-aliased
+
+	screen.DrawTriangles(w.vertices, w.indices, whiteSubImage, &ebiten.DrawTrianglesOptions{
+		FillRule: ebiten.FillRuleNonZero,
+	})
+}
+
+func (w *Waveform) Update(samples []int16) {
+	// Update the waveform data
+
+	var path vector.Path
 
 	npoints := len(samples)
 	indexToPoint := func(i int, v int16) (float32, float32) {
-		x := wx + float32(i*int(ww)/npoints)
+		x := w.x + float32(i*int(w.w)/npoints)
 		// Center the wave vertically and scale the amplitude
-		y := wy + (float32(v) / 32768.0 * float32(wh/2))
+		y := w.y + w.h/2 + (float32(v) / 32768.0 * w.h)
 		return x, y
 	}
 
@@ -222,42 +263,29 @@ func (g *Game) drawWave(screen *ebiten.Image, bounds image.Rectangle, samples []
 	}
 
 	// Draw just the wave line
-	g.vertices, g.indices = path.AppendVerticesAndIndicesForStroke(g.vertices[:0], g.indices[:0], &vector.StrokeOptions{
-		Width:        2,
-		LineJoin:     vector.LineJoinRound,
-		LineCap:      vector.LineCapRound,
+	w.vertices, w.indices = path.AppendVerticesAndIndicesForStroke(w.vertices[:0], w.indices[:0], &vector.StrokeOptions{
+		Width:    2,
+		LineJoin: vector.LineJoinRound,
+		LineCap:  vector.LineCapRound,
 	})
 
 	// Set color for the wave
-	for i := range g.vertices {
-		g.vertices[i].SrcX = 1
-		g.vertices[i].SrcY = 1
-		g.vertices[i].ColorR = 0x33 / float32(0xff)
-		g.vertices[i].ColorG = 0x66 / float32(0xff)
-		g.vertices[i].ColorB = 0xff / float32(0xff)
-		g.vertices[i].ColorA = 1
+	for i := range w.vertices {
+		w.vertices[i].SrcX = 1
+		w.vertices[i].SrcY = 1
+		w.vertices[i].ColorR = 0x33 / float32(0xff)
+		w.vertices[i].ColorG = 0x66 / float32(0xff)
+		w.vertices[i].ColorB = 0xff / float32(0xff)
+		w.vertices[i].ColorA = 1
 	}
-
-	screen.DrawTriangles(g.vertices, g.indices, whiteSubImage, &ebiten.DrawTrianglesOptions{
-		FillRule: ebiten.FillRuleNonZero,
-	})
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
 	dst := screen
-
 	dst.Fill(color.RGBA{0xe0, 0xe0, 0xe0, 0xff})
 
-	w, h := g.numberInput.Size()
-	p := image.Rect(100, 200, 100+w, 200+h)
-	g.drawWave(dst, p, g.samples[:])
-
 	g.numberInput.Draw(screen)
-
-	msg := fmt.Sprintf("TPS: %0.2f\nFPS: %0.2f", ebiten.ActualTPS(), ebiten.ActualFPS())
-	msg += "\nPress A to switch anti-alias."
-	msg += "\nPress L to switch the fill mode and the line mode."
-	ebitenutil.DebugPrint(screen, msg)
+	g.waveform.Draw(screen)
 }
 
 func randomInt16(rmin, rmax int16) int16 {
@@ -271,6 +299,7 @@ func (g *Game) Update() error {
 		g.samples[i] = randomInt16(-16000, 16000)
 	}
 
+	g.waveform.Update(g.samples[:])
 	return nil
 }
 
@@ -281,6 +310,9 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 func main() {
 	g := &Game{}
 	g.numberInput = NewNumberInput(137000000, 174000000, 100, 100)
+
+	w, h := g.numberInput.Size()
+	g.waveform = NewWaveform(100, 110+h, w, h)
 
 	ebiten.SetWindowSize(screenWidth, screenHeight)
 	ebiten.SetWindowTitle("Audio wave")

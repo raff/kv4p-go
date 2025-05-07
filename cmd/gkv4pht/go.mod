@@ -4,7 +4,7 @@ go 1.24.3
 
 require (
 	github.com/hajimehoshi/ebiten/v2 v2.8.8
-	github.com/raff/kv4p-go v0.0.0-20250506232043-b845a6054ab3
+	github.com/raff/kv4p-go v0.0.0-20250507023648-e59c5ee7c878
 )
 
 require (

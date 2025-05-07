@@ -81,6 +81,8 @@ type NumberInput struct {
 	focused   bool
 	editing   bool
 	cursor    int
+
+	ValueCallback func(value int)
 }
 
 func NewNumberInput(minValue, maxValue int, x, y int) *NumberInput {
@@ -139,6 +141,8 @@ func (n *NumberInput) Update() {
 	}
 
 	if n.focused {
+		prev := n.value
+
 		_, dy := ebiten.Wheel()
 		if dy != 0 {
 			// Calculate the multiplier based on cursor position
@@ -218,6 +222,10 @@ func (n *NumberInput) Update() {
 					n.value = n.minValue
 				}
 			}
+		}
+
+		if n.value != prev && n.ValueCallback != nil {
+			n.ValueCallback(n.value)
 		}
 	}
 }
@@ -324,10 +332,12 @@ func (s *SMeter) Draw(screen *ebiten.Image) {
 	// Draw the S-meter
 	vector.DrawFilledRect(screen, s.x, s.y, s.w, s.h, color.RGBA{0x33, 0x33, 0x33, 0xff}, false) // anti-aliased
 
+	w := s.w / 9
+
 	// Draw the S-meter scale
 	for i := 1; i <= s.value; i++ {
-		x := s.x + float32(i)*s.w/9
-		vector.DrawFilledRect(screen, x, s.y+s.h-4, 2, 4, color.RGBA{0xff, 0xff, 0xff, 0xff}, false) // anti-aliased
+		x := s.x + float32(i)*w
+		vector.DrawFilledRect(screen, x, s.y+s.h-4, 2, w-2, color.RGBA{0xe0, 0xe0, 0xe0, 0xe0}, false) // anti-aliased
 	}
 }
 
@@ -349,6 +359,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	g.numberInput.Draw(screen)
 	g.waveform.Draw(screen)
+	g.smeter.Draw(screen)
 }
 
 func randomInt16(rmin, rmax int16) int16 {
@@ -391,10 +402,10 @@ func main() {
 	flag.Parse()
 
 	g := &Game{}
-	g.numberInput = NewNumberInput(137000000, 174000000, 100, 100)
-
+	g.numberInput = NewNumberInput(137000000, 174000000, 20, 20)
 	w, h := g.numberInput.Size()
-	g.waveform = NewWaveform(100, 110+h, w, h)
+	g.waveform = NewWaveform(20, 30+h, w, h)
+	g.smeter = NewSMeter(20, 40+h+h, w, h/2)
 
 	radio, err := kv4pht.Start(*dev)
 	if err != nil {
@@ -501,7 +512,7 @@ func main() {
 			return
 		}
 
-		g.radio.SetVolume(100)
+		g.radio.SetVolume(0.5)
 
 		g.bw = kv4pht.DRA818_25K
 		if *bw != "wide" {
@@ -517,6 +528,13 @@ func main() {
 		g.squelch = 255 * *squelch / 100 // squelch is actually 0-255
 		g.freq = float64(*freq)
 		g.numberInput.SetValue(int(g.freq * 1000000))
+		g.numberInput.ValueCallback = func(value int) {
+			g.freq = float64(value) / 1000000
+
+			if err := g.radio.SendGroup(g.bw, g.freq, g.freq, g.squelch); err != nil {
+				log.Printf("Send GROUP: %v", err)
+			}
+		}
 
 		if err := g.radio.SendGroup(g.bw, g.freq, g.freq, g.squelch); err != nil {
 			log.Fatalf("Send GROUP: %v", err)
@@ -525,7 +543,7 @@ func main() {
 	}()
 
 	ebiten.SetWindowSize(screenWidth, screenHeight)
-	ebiten.SetWindowTitle("Audio wave")
+	ebiten.SetWindowTitle("KV4P-HT Radio")
 	if err := ebiten.RunGame(g); err != nil {
 		log.Fatal(err)
 	}

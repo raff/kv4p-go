@@ -4,7 +4,7 @@ go 1.24.3
 
 require (
 	github.com/hajimehoshi/ebiten/v2 v2.8.8
-	github.com/raff/kv4p-go v0.0.0-20250507023648-e59c5ee7c878
+	github.com/raff/kv4p-go v0.0.0-20250507023859-d02c2d165f96
 )
 
 require (
@@ -22,3 +22,5 @@ require (
 	golang.org/x/text v0.18.0 // indirect
 	gopkg.in/hraban/opus.v2 v2.0.0-20230925203106-0188a62cb302 // indirect
 )
+
+replace github.com/raff/kv4p-go => ../..

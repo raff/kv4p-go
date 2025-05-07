@@ -104,7 +104,8 @@ type CommandProcessor struct {
 	audioBuffer  []int16
 	player       *oto.Player
 
-	AudioCallback func([]int16)
+	AudioCallback  func([]int16)
+	SMeterCallback func(int)
 }
 
 func (p *CommandProcessor) Hello() bool {
@@ -220,6 +221,9 @@ func (p *CommandProcessor) processCommand() {
 		if p.smeter != smeter || Debug {
 			log.Printf("S-Meter: %d\n", smeter)
 			p.smeter = smeter
+		}
+		if p.SMeterCallback != nil {
+			p.SMeterCallback(smeter)
 		}
 	case RES_RX_AUDIO:
 		if Debug {
@@ -480,9 +484,9 @@ func (p *CommandProcessor) Read(buf []byte) (int, error) {
 func (p *CommandProcessor) SetVolume(volume float64) {
 	if p.player != nil {
 		p.player.SetVolume(volume)
-		if volume > 0 {
+		if volume > 0 && !p.player.IsPlaying() {
 			p.player.Play()
-		} else {
+		} else if volume == 0 && p.player.IsPlaying() {
 			p.player.Pause()
 		}
 	}

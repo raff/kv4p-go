@@ -59,12 +59,15 @@ type Game struct {
 
 	numberInput *NumberInput
 	waveform    *Waveform
-	quit bool
+	smeter      *SMeter
+	quit        bool
 
-	radio *kv4pht.CommandProcessor
-	bw   int
+	radio   *kv4pht.CommandProcessor
+	bw      int
 	squelch int
-	freq float64
+	freq    float64
+
+	smeterValue int
 }
 
 type NumberInput struct {
@@ -306,6 +309,40 @@ func (w *Waveform) Update(samples []int16) {
 	}
 }
 
+type SMeter struct {
+	x, y, w, h float32 // position
+	value      int     // S-meter value
+}
+
+func NewSMeter(x, y, w, h float32) *SMeter {
+	return &SMeter{
+		x: x, y: y, w: w, h: h,
+	}
+}
+
+func (s *SMeter) Draw(screen *ebiten.Image) {
+	// Draw the S-meter
+	vector.DrawFilledRect(screen, s.x, s.y, s.w, s.h, color.RGBA{0x33, 0x33, 0x33, 0xff}, false) // anti-aliased
+
+	// Draw the S-meter scale
+	for i := 1; i <= s.value; i++ {
+		x := s.x + float32(i)*s.w/9
+		vector.DrawFilledRect(screen, x, s.y+s.h-4, 2, 4, color.RGBA{0xff, 0xff, 0xff, 0xff}, false) // anti-aliased
+	}
+}
+
+func (s *SMeter) Update(value int) {
+	// Update the S-meter value
+	s.value = value
+	// Clamp the value to the range 0-9
+	if s.value < 1 {
+		s.value = 1
+	}
+	if s.value > 9 {
+		s.value = 9
+	}
+}
+
 func (g *Game) Draw(screen *ebiten.Image) {
 	dst := screen
 	dst.Fill(color.RGBA{0xe0, 0xe0, 0xe0, 0xff})
@@ -330,6 +367,8 @@ func (g *Game) Update() error {
 	}
 
 	g.waveform.Update(g.samples[:])
+
+	g.smeter.Update(g.smeterValue)
 	return nil
 }
 
@@ -365,6 +404,9 @@ func main() {
 	g.radio = radio
 	g.radio.AudioCallback = func(samples []int16) {
 		g.samples = samples
+	}
+	g.radio.SMeterCallback = func(smeter int) {
+		g.smeterValue = smeter
 	}
 
 	shutdown := func() {

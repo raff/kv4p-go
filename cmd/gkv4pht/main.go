@@ -71,8 +71,10 @@ type Game struct {
 }
 
 type NumberInput struct {
-	position    image.Point
-	ddimensions image.Point
+	x, y   float32
+	dw, dh float32
+
+	bounds image.Rectangle
 
 	value     int
 	minValue  int
@@ -85,7 +87,7 @@ type NumberInput struct {
 	ValueCallback func(value int)
 }
 
-func NewNumberInput(minValue, maxValue int, x, y int) *NumberInput {
+func NewNumberInput(minValue, maxValue int, x, y float32) *NumberInput {
 	maxDigits := 0
 	for i := 1; i <= maxValue; i *= 10 {
 		maxDigits++
@@ -96,8 +98,12 @@ func NewNumberInput(minValue, maxValue int, x, y int) *NumberInput {
 	dh = m.HLineGap + m.HAscent + m.HDescent + m.HLineGap
 
 	return &NumberInput{
-		position:    image.Point{x, y},
-		ddimensions: image.Point{int(dw), int(dh)},
+		x:  x,
+		y:  y,
+		dw: float32(dw),
+		dh: float32(dh),
+
+		bounds: image.Rect(int(x), int(y), int(x)+maxDigits*int(dw), int(y)+int(dh)),
 
 		value:     minValue,
 		minValue:  minValue,
@@ -107,7 +113,8 @@ func NewNumberInput(minValue, maxValue int, x, y int) *NumberInput {
 }
 
 func (n *NumberInput) Size() (float32, float32) {
-	return float32(n.ddimensions.X * n.maxDigits), float32(n.ddimensions.Y)
+	//return n.dw * float32(n.maxDigits), n.dh
+	return float32(n.bounds.Dx()), float32(n.bounds.Dy())
 }
 
 func (n *NumberInput) SetValue(value int) {
@@ -128,12 +135,11 @@ func (n *NumberInput) Update() {
 		x, y := ebiten.CursorPosition()
 		mousePos := image.Point{x, y}
 		// Check if click is within number input bounds
-		bounds := image.Rect(n.position.X, n.position.Y, n.position.X+n.maxDigits*n.ddimensions.X, n.position.Y+n.ddimensions.Y)
-		n.focused = mousePos.In(bounds)
+		n.focused = mousePos.In(n.bounds)
 		if n.focused {
 			n.editing = true
 			// Calculate which digit was clicked
-			n.cursor = (x - n.position.X) / n.ddimensions.X
+			n.cursor = (x - int(n.x)) / int(n.dw)
 			if n.cursor >= n.maxDigits {
 				n.cursor = n.maxDigits - 1
 			}
@@ -232,23 +238,23 @@ func (n *NumberInput) Update() {
 
 func (n *NumberInput) Draw(screen *ebiten.Image) {
 	// Draw background
-	vector.DrawFilledRect(screen, float32(n.position.X), float32(n.position.Y), float32(n.maxDigits*n.ddimensions.X), float32(n.ddimensions.Y), color.RGBA{0x33, 0x33, 0x33, 0xff}, false) // anti-aliased
+	vector.DrawFilledRect(screen, n.x, n.y, float32(n.maxDigits)*n.dw, n.dh, color.RGBA{0x33, 0x33, 0x33, 0xff}, false) // anti-aliased
 
 	// Draw digits
 	str := fmt.Sprintf(fmt.Sprintf("%%0%dd", n.maxDigits), n.value)
 	for i, ch := range str {
-		x := n.position.X + i*n.ddimensions.X
+		x := int(n.x) + i*int(n.dw)
 
 		op := &text.DrawOptions{}
-		op.GeoM.Translate(float64(x+4), float64(n.position.Y+4))
+		op.GeoM.Translate(float64(x+4), float64(n.y+4))
 		op.ColorScale.ScaleWithColor(color.White)
 		text.Draw(screen, string(ch), fface, op)
 	}
 
 	// Draw cursor if editing
 	if n.editing && n.cursor < n.maxDigits {
-		x := n.position.X + n.cursor*n.ddimensions.X
-		vector.DrawFilledRect(screen, float32(x), float32(n.position.Y+n.ddimensions.Y-4), float32(n.ddimensions.X), 2, color.RGBA{0xff, 0xff, 0xff, 0xff}, false) // anti-aliased
+		x := int(n.x) + n.cursor*int(n.dw)
+		vector.DrawFilledRect(screen, float32(x), n.y+n.dh-4, n.dw, 2, color.RGBA{0xff, 0xff, 0xff, 0xff}, false) // anti-aliased
 	}
 }
 
@@ -331,13 +337,16 @@ func NewSMeter(x, y, w, h float32) *SMeter {
 func (s *SMeter) Draw(screen *ebiten.Image) {
 	// Draw the S-meter
 	vector.DrawFilledRect(screen, s.x, s.y, s.w, s.h, color.RGBA{0x33, 0x33, 0x33, 0xff}, false) // anti-aliased
+	if s.value == 0 {
+		return
+	}
 
 	w := s.w / 9
 
 	// Draw the S-meter scale
-	for i := 1; i <= s.value; i++ {
+	for i := 0; i < s.value; i++ {
 		x := s.x + float32(i)*w
-		vector.DrawFilledRect(screen, x, s.y+s.h-4, 2, w-2, color.RGBA{0xe0, 0xe0, 0xe0, 0xe0}, false) // anti-aliased
+		vector.DrawFilledRect(screen, x+4, s.y+4, w-4, s.h-8, color.RGBA{0xe0, 0xe0, 0xe0, 0xe0}, false) // anti-aliased
 	}
 }
 
@@ -402,10 +411,18 @@ func main() {
 	flag.Parse()
 
 	g := &Game{}
-	g.numberInput = NewNumberInput(137000000, 174000000, 20, 20)
+
+	left := float32(20)
+	top := float32(20)
+
+	g.numberInput = NewNumberInput(137000000, 174000000, left, top)
 	w, h := g.numberInput.Size()
-	g.waveform = NewWaveform(20, 30+h, w, h)
-	g.smeter = NewSMeter(20, 40+h+h, w, h/2)
+
+	top += h + 10
+	g.smeter = NewSMeter(left, top, w, h/2)
+
+	top += h/2 + 10
+	g.waveform = NewWaveform(left, top, w, h)
 
 	radio, err := kv4pht.Start(*dev)
 	if err != nil {

@@ -103,6 +103,8 @@ type CommandProcessor struct {
 	audioDecoder *opus.Decoder
 	audioBuffer  []int16
 	player       *oto.Player
+
+	AudioCallback func([]int16)
 }
 
 func (p *CommandProcessor) Hello() bool {
@@ -238,6 +240,10 @@ func (p *CommandProcessor) processCommand() {
 			}
 
 			p.audioBuffer = append(p.audioBuffer, out[:n]...)
+
+			if p.AudioCallback != nil {
+				p.AudioCallback(out[:n])
+			}
 		}
 
 	default:

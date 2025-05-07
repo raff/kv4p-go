@@ -404,7 +404,7 @@ func main() {
 	bw := flag.String("bw", "wide", "Bandwidth (wide=25k, narrow=12.5k)")
 	freq := flag.Float64("freq", 162.4, "Frequency in MHz") // NOAA Weather Radio
 	squelch := flag.Int("squelch", 0, "Squelch level (0-100)")
-	pre := flag.Bool("pre", false, "pre-emphasis filter")
+	pre := flag.Bool("pre", true, "pre-emphasis filter")
 	high := flag.Bool("high", true, "high-pass filter")
 	low := flag.Bool("low", true, "low-pass filter")
 	reset := flag.Bool("reset", false, "reset board")
@@ -415,7 +415,14 @@ func main() {
 	left := float32(20)
 	top := float32(20)
 
-	g.numberInput = NewNumberInput(137000000, 174000000, left, top)
+	minfreq := int(kv4pht.VHF_MIN_FREQ * 1000000)
+	maxfreq := int(kv4pht.VHF_MAX_FREQ * 1000000)
+	if *band == "uhf" || *freq >= kv4pht.UHF_MIN_FREQ {
+		minfreq = int(kv4pht.UHF_MIN_FREQ * 1000000)
+		maxfreq = int(kv4pht.UHF_MAX_FREQ * 1000000)
+	}
+
+	g.numberInput = NewNumberInput(minfreq, maxfreq, left, top)
 	w, h := g.numberInput.Size()
 
 	top += h + 10

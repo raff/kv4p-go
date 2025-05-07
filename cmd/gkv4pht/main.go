@@ -19,7 +19,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 
-	"github.com/raff/kv4p-go"
+	kv4pht "github.com/raff/kv4p-go"
 )
 
 const fontSize = 28
@@ -31,7 +31,8 @@ var (
 	// Use whiteSubImage at DrawTriangles instead of whiteImage in order to avoid bleeding edges.
 	whiteSubImage = whiteImage.SubImage(image.Rect(1, 1, 2, 2)).(*ebiten.Image)
 
-	fface text.Face
+	largeFont text.Face
+	smallFont text.Face
 )
 
 func init() {
@@ -42,7 +43,8 @@ func init() {
 		log.Fatal("error loading font", err)
 	}
 
-	fface = &text.GoTextFace{Source: ff, Size: 28}
+	largeFont = &text.GoTextFace{Source: ff, Size: 28}
+	smallFont = &text.GoTextFace{Source: ff, Size: 18}
 }
 
 const (
@@ -60,6 +62,7 @@ type Game struct {
 	numberInput *NumberInput
 	waveform    *Waveform
 	smeter      *SMeter
+	band        *ToggleButton
 	quit        bool
 
 	radio   *kv4pht.CommandProcessor
@@ -93,8 +96,8 @@ func NewNumberInput(minValue, maxValue int, x, y float32) *NumberInput {
 		maxDigits++
 	}
 
-	dw, dh := text.Measure("0 ", fface, 0)
-	m := fface.Metrics()
+	dw, dh := text.Measure("0 ", largeFont, 0)
+	m := largeFont.Metrics()
 	dh = m.HLineGap + m.HAscent + m.HDescent + m.HLineGap
 
 	return &NumberInput{
@@ -115,6 +118,17 @@ func NewNumberInput(minValue, maxValue int, x, y float32) *NumberInput {
 func (n *NumberInput) Size() (float32, float32) {
 	//return n.dw * float32(n.maxDigits), n.dh
 	return float32(n.bounds.Dx()), float32(n.bounds.Dy())
+}
+
+func (n *NumberInput) SetLimits(minValue, maxValue int) {
+	n.minValue = minValue
+	n.maxValue = maxValue
+	if n.value < minValue {
+		n.value = minValue
+	}
+	if n.value > maxValue {
+		n.value = maxValue
+	}
 }
 
 func (n *NumberInput) SetValue(value int) {
@@ -248,7 +262,7 @@ func (n *NumberInput) Draw(screen *ebiten.Image) {
 		op := &text.DrawOptions{}
 		op.GeoM.Translate(float64(x+4), float64(n.y+4))
 		op.ColorScale.ScaleWithColor(color.White)
-		text.Draw(screen, string(ch), fface, op)
+		text.Draw(screen, string(ch), largeFont, op)
 	}
 
 	// Draw cursor if editing
@@ -263,6 +277,54 @@ type Waveform struct {
 	indices  []uint16
 
 	x, y, w, h float32
+}
+type ToggleButton struct {
+	x, y, w, h float32
+	label      string
+	value      bool
+	onClick    func(bool)
+}
+
+func NewToggleButton(x, y, w, h float32, label string, value bool, onClick func(bool)) *ToggleButton {
+	return &ToggleButton{
+		x:       x,
+		y:       y,
+		w:       w,
+		h:       h,
+		label:   label,
+		value:   value,
+		onClick: onClick,
+	}
+}
+
+func (b *ToggleButton) Update() {
+	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+		x, y := ebiten.CursorPosition()
+		if float32(x) >= b.x && float32(x) <= b.x+b.w &&
+			float32(y) >= b.y && float32(y) <= b.y+b.h {
+			b.value = !b.value
+			if b.onClick != nil {
+				b.onClick(b.value)
+			}
+		}
+	}
+}
+
+func (b *ToggleButton) Draw(screen *ebiten.Image) {
+	// Draw background
+	colors := map[bool]color.RGBA{
+		false: {0x99, 0x99, 0x99, 0xff},
+		true:  {0x33, 0x33, 0x33, 0xff},
+	}
+
+	vector.DrawFilledRect(screen, b.x, b.y, b.w/2, b.h, colors[b.value], false)
+	vector.DrawFilledRect(screen, b.x+b.w/2, b.y, b.w/2, b.h, colors[!b.value], false)
+
+	// Draw label
+	op := &text.DrawOptions{}
+	op.GeoM.Translate(float64(b.x+4), float64(b.y+8))
+	op.ColorScale.ScaleWithColor(color.White)
+	text.Draw(screen, b.label, smallFont, op)
 }
 
 func NewWaveform(x, y, w, h float32) *Waveform {
@@ -369,6 +431,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	g.numberInput.Draw(screen)
 	g.waveform.Draw(screen)
 	g.smeter.Draw(screen)
+	g.band.Draw(screen)
 }
 
 func randomInt16(rmin, rmax int16) int16 {
@@ -387,8 +450,8 @@ func (g *Game) Update() error {
 	}
 
 	g.waveform.Update(g.samples[:])
-
 	g.smeter.Update(g.smeterValue)
+	g.band.Update()
 	return nil
 }
 
@@ -424,6 +487,18 @@ func main() {
 
 	g.numberInput = NewNumberInput(minfreq, maxfreq, left, top)
 	w, h := g.numberInput.Size()
+
+	g.band = NewToggleButton(left+w+20, top, w/2-10, h, "VHF   UHF", true, func(value bool) {
+		if value {
+			minfreq := int(kv4pht.VHF_MIN_FREQ * 1000000)
+			maxfreq := int(kv4pht.VHF_MAX_FREQ * 1000000)
+			g.numberInput.SetLimits(minfreq, maxfreq)
+		} else {
+			minfreq := int(kv4pht.UHF_MIN_FREQ * 1000000)
+			maxfreq := int(kv4pht.UHF_MAX_FREQ * 1000000)
+			g.numberInput.SetLimits(minfreq, maxfreq)
+		}
+	})
 
 	top += h + 10
 	g.smeter = NewSMeter(left, top, w, h/2)

@@ -2,17 +2,24 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"image"
 	"image/color"
 	"log"
 	"math/rand"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/examples/resources/fonts"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
+
+	"github.com/raff/kv4p-go"
 )
 
 const fontSize = 28
@@ -48,10 +55,16 @@ func maxCounter(index int) int {
 }
 
 type Game struct {
-	samples [1920]int16
+	samples []int16
 
 	numberInput *NumberInput
 	waveform    *Waveform
+	quit bool
+
+	radio *kv4pht.CommandProcessor
+	bw   int
+	squelch int
+	freq float64
 }
 
 type NumberInput struct {
@@ -90,6 +103,19 @@ func NewNumberInput(minValue, maxValue int, x, y int) *NumberInput {
 
 func (n *NumberInput) Size() (float32, float32) {
 	return float32(n.ddimensions.X * n.maxDigits), float32(n.ddimensions.Y)
+}
+
+func (n *NumberInput) SetValue(value int) {
+	if value < n.minValue {
+		value = n.minValue
+	}
+	if value > n.maxValue {
+		value = n.maxValue
+	}
+	n.value = value
+	n.cursor = 0
+	n.editing = false
+	n.focused = false
 }
 
 func (n *NumberInput) Update() {
@@ -293,6 +319,10 @@ func randomInt16(rmin, rmax int16) int16 {
 }
 
 func (g *Game) Update() error {
+	if g.quit {
+		return ebiten.Termination
+	}
+
 	g.numberInput.Update()
 
 	for i := 0; i < len(g.samples); i++ {
@@ -308,11 +338,149 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 }
 
 func main() {
+	dev := flag.String("dev", "", "Serial device to use (e.g. /dev/ttyUSB0)")
+	flag.BoolVar(&kv4pht.Debug, "debug", kv4pht.Debug, "Enable debug output")
+
+	band := flag.String("band", "vhf", "Band (vhf, uhf)")
+	bw := flag.String("bw", "wide", "Bandwidth (wide=25k, narrow=12.5k)")
+	freq := flag.Float64("freq", 162.4, "Frequency in MHz") // NOAA Weather Radio
+	squelch := flag.Int("squelch", 0, "Squelch level (0-100)")
+	pre := flag.Bool("pre", false, "pre-emphasis filter")
+	high := flag.Bool("high", true, "high-pass filter")
+	low := flag.Bool("low", true, "low-pass filter")
+	reset := flag.Bool("reset", false, "reset board")
+	flag.Parse()
+
 	g := &Game{}
 	g.numberInput = NewNumberInput(137000000, 174000000, 100, 100)
 
 	w, h := g.numberInput.Size()
 	g.waveform = NewWaveform(100, 110+h, w, h)
+
+	radio, err := kv4pht.Start(*dev)
+	if err != nil {
+		log.Fatalf("Start: %v", err)
+	}
+
+	g.radio = radio
+	g.radio.AudioCallback = func(samples []int16) {
+		g.samples = samples
+	}
+
+	shutdown := func() {
+		g.quit = true
+		g.radio.Stop()
+		os.Exit(0)
+	}
+
+	defer shutdown()
+
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc,
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT)
+	go func() {
+		s := <-sigc
+		log.Println(s)
+		shutdown()
+	}()
+
+	go func() {
+		if *reset {
+			log.Println("Resetting board")
+			g.radio.Reset()
+			time.Sleep(1 * time.Second)
+		}
+
+		// Wait for HELLO message
+		for i := 0; i < 2; i++ {
+			if g.radio.Hello() {
+				break
+			}
+
+			if i > 0 {
+				log.Println("Reset board")
+				g.radio.Reset()
+			}
+
+			for j := 0; j < 10 && !g.radio.Hello(); j++ {
+				log.Println("Waiting for HELLO message...")
+				time.Sleep(1 * time.Second)
+			}
+		}
+
+		if !g.radio.Hello() {
+			log.Println("No HELLO message received")
+			return
+		}
+
+		if err := g.radio.SendStop(); err != nil {
+			log.Fatalf("Send STOP: %v", err)
+			return
+		}
+
+		if *freq < kv4pht.VHF_MIN_FREQ {
+			*freq = kv4pht.VHF_MIN_FREQ
+		} else if *freq > kv4pht.VHF_MAX_FREQ && *freq < kv4pht.UHF_MIN_FREQ {
+			*freq = kv4pht.VHF_MAX_FREQ
+		} else if *freq > kv4pht.UHF_MAX_FREQ {
+			*freq = kv4pht.UHF_MAX_FREQ
+		}
+
+		mode := kv4pht.MODE_VHF
+		if *band == "uhf" || *freq >= kv4pht.UHF_MIN_FREQ {
+			mode = kv4pht.MODE_UHF
+		}
+		if err := g.radio.SendConfig(mode); err != nil {
+			log.Fatalf("Send CONFIG: %v", err)
+			return
+		}
+
+		// Wait for VERSION message
+		for i := 0; i < 10; i++ {
+			v, _, _ := g.radio.Version()
+			if v != 0 {
+				break
+			}
+
+			log.Println("Waiting for VERSION message...")
+			time.Sleep(1 * time.Second)
+		}
+
+		if v, _, _ := g.radio.Version(); v == 0 {
+			log.Println("No VERSION message received")
+			return
+		}
+
+		if err := g.radio.SendFilters(*pre, *high, *low); err != nil {
+			log.Fatalf("Send FILTERS: %v", err)
+			return
+		}
+
+		g.radio.SetVolume(100)
+
+		g.bw = kv4pht.DRA818_25K
+		if *bw != "wide" {
+			g.bw = kv4pht.DRA818_12K5
+		}
+
+		if *squelch < 0 {
+			*squelch = 0
+		} else if *squelch > 100 {
+			*squelch = 100
+		}
+
+		g.squelch = 255 * *squelch / 100 // squelch is actually 0-255
+		g.freq = float64(*freq)
+		g.numberInput.SetValue(int(g.freq * 1000000))
+
+		if err := g.radio.SendGroup(g.bw, g.freq, g.freq, g.squelch); err != nil {
+			log.Fatalf("Send GROUP: %v", err)
+			return
+		}
+	}()
 
 	ebiten.SetWindowSize(screenWidth, screenHeight)
 	ebiten.SetWindowTitle("Audio wave")

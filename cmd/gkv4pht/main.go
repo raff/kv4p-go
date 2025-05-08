@@ -63,6 +63,9 @@ type Game struct {
 	waveform    *Waveform
 	smeter      *SMeter
 	band        *ToggleButton
+	pre         *ToggleButton
+	high        *ToggleButton
+	low         *ToggleButton
 	quit        bool
 
 	radio   *kv4pht.CommandProcessor
@@ -432,6 +435,9 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	g.waveform.Draw(screen)
 	g.smeter.Draw(screen)
 	g.band.Draw(screen)
+	g.pre.Draw(screen)
+	g.high.Draw(screen)
+	g.low.Draw(screen)
 }
 
 func randomInt16(rmin, rmax int16) int16 {
@@ -452,6 +458,9 @@ func (g *Game) Update() error {
 	g.waveform.Update(g.samples[:])
 	g.smeter.Update(g.smeterValue)
 	g.band.Update()
+	g.pre.Update()
+	g.high.Update()
+	g.low.Update()
 	return nil
 }
 
@@ -466,12 +475,20 @@ func main() {
 	band := flag.String("band", "vhf", "Band (vhf, uhf)")
 	bw := flag.String("bw", "wide", "Bandwidth (wide=25k, narrow=12.5k)")
 	freq := flag.Float64("freq", 162.4, "Frequency in MHz") // NOAA Weather Radio
-	squelch := flag.Int("squelch", 0, "Squelch level (0-100)")
+	squelch := flag.Int("squelch", 0, "Squelch level (0-8)")
 	pre := flag.Bool("pre", true, "pre-emphasis filter")
 	high := flag.Bool("high", true, "high-pass filter")
 	low := flag.Bool("low", true, "low-pass filter")
 	reset := flag.Bool("reset", false, "reset board")
 	flag.Parse()
+
+	if *freq < kv4pht.VHF_MIN_FREQ {
+		*freq = kv4pht.VHF_MIN_FREQ
+	} else if *freq > kv4pht.VHF_MAX_FREQ && *freq < kv4pht.UHF_MIN_FREQ {
+		*freq = kv4pht.VHF_MAX_FREQ
+	} else if *freq > kv4pht.UHF_MAX_FREQ {
+		*freq = kv4pht.UHF_MAX_FREQ
+	}
 
 	g := &Game{}
 
@@ -489,14 +506,22 @@ func main() {
 	w, h := g.numberInput.Size()
 
 	g.band = NewToggleButton(left+w+20, top, w/2-10, h, "VHF   UHF", true, func(value bool) {
+		var mode int
+
 		if value {
+			mode = kv4pht.MODE_VHF
 			minfreq := int(kv4pht.VHF_MIN_FREQ * 1000000)
 			maxfreq := int(kv4pht.VHF_MAX_FREQ * 1000000)
 			g.numberInput.SetLimits(minfreq, maxfreq)
 		} else {
+			mode = kv4pht.MODE_UHF
 			minfreq := int(kv4pht.UHF_MIN_FREQ * 1000000)
 			maxfreq := int(kv4pht.UHF_MAX_FREQ * 1000000)
 			g.numberInput.SetLimits(minfreq, maxfreq)
+		}
+
+		if err := g.radio.SendConfig(mode); err != nil {
+			log.Printf("Send CONFIG: %v", err)
 		}
 	})
 
@@ -510,6 +535,27 @@ func main() {
 	if err != nil {
 		log.Fatalf("Start: %v", err)
 	}
+
+	top += h + 10
+	g.pre = NewToggleButton(left, top, w, h, "Pre-emphasis", *pre, func(value bool) {
+		if err := g.radio.SendFilters(g.pre.value, g.high.value, g.low.value); err != nil {
+			log.Printf("Send FILTERS: %v", err)
+		}
+	})
+
+	top += h + 10
+	g.high = NewToggleButton(left, top, w, h, "High-pass", *high, func(value bool) {
+		if err := g.radio.SendFilters(g.pre.value, g.high.value, g.low.value); err != nil {
+			log.Printf("Send FILTERS: %v", err)
+		}
+	})
+
+	top += h + 10
+	g.low = NewToggleButton(left, top, w, h, "Low-pass", *high, func(value bool) {
+		if err := g.radio.SendFilters(g.pre.value, g.high.value, g.low.value); err != nil {
+			log.Printf("Send FILTERS: %v", err)
+		}
+	})
 
 	g.radio = radio
 	g.radio.AudioCallback = func(samples []int16) {
@@ -573,14 +619,6 @@ func main() {
 			return
 		}
 
-		if *freq < kv4pht.VHF_MIN_FREQ {
-			*freq = kv4pht.VHF_MIN_FREQ
-		} else if *freq > kv4pht.VHF_MAX_FREQ && *freq < kv4pht.UHF_MIN_FREQ {
-			*freq = kv4pht.VHF_MAX_FREQ
-		} else if *freq > kv4pht.UHF_MAX_FREQ {
-			*freq = kv4pht.UHF_MAX_FREQ
-		}
-
 		mode := kv4pht.MODE_VHF
 		if *band == "uhf" || *freq >= kv4pht.UHF_MIN_FREQ {
 			mode = kv4pht.MODE_UHF
@@ -620,11 +658,11 @@ func main() {
 
 		if *squelch < 0 {
 			*squelch = 0
-		} else if *squelch > 100 {
-			*squelch = 100
+		} else if *squelch > 8 {
+			*squelch = 8
 		}
 
-		g.squelch = 255 * *squelch / 100 // squelch is actually 0-255
+		g.squelch = *squelch
 		g.freq = float64(*freq)
 		g.numberInput.SetValue(int(g.freq * 1000000))
 		g.numberInput.ValueCallback = func(value int) {

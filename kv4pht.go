@@ -77,7 +77,7 @@ type Group struct {
 	freq_tx  float32
 	freq_rx  float32
 	ctxss_tx byte
-	squelch  byte
+	squelch  byte // 0: listen mode, 1-8: squelch level
 	ctxss_rx byte
 }
 

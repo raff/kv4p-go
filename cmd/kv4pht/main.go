@@ -21,7 +21,7 @@ func main() {
 	band := flag.String("band", "vhf", "Band (vhf, uhf)")
 	bw := flag.String("bw", "wide", "Bandwidth (wide=25k, narrow=12.5k)")
 	freq := flag.Float64("freq", 162.4, "Frequency in MHz") // NOAA Weather Radio
-	squelch := flag.Int("squelch", 0, "Squelch level (0-100)")
+	squelch := flag.Int("squelch", 0, "Squelch level (0-8)")
 	pre := flag.Bool("pre", false, "pre-emphasis filter")
 	high := flag.Bool("high", true, "high-pass filter")
 	low := flag.Bool("low", true, "low-pass filter")
@@ -159,11 +159,9 @@ func main() {
 
 	if *squelch < 0 {
 		*squelch = 0
-	} else if *squelch > 100 {
-		*squelch = 100
+	} else if *squelch > 8 {
+		*squelch = 8
 	}
-
-	*squelch = 255 * *squelch / 100 // squelch is actually 0-255
 
 	if *scan {
 		var min, max, step float64

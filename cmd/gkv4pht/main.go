@@ -7,7 +7,6 @@ import (
 	"image"
 	"image/color"
 	"log"
-	"math/rand"
 	"os"
 	"os/signal"
 	"syscall"
@@ -275,12 +274,6 @@ func (n *NumberInput) Draw(screen *ebiten.Image) {
 	}
 }
 
-type Waveform struct {
-	vertices []ebiten.Vertex
-	indices  []uint16
-
-	x, y, w, h float32
-}
 type ToggleButton struct {
 	x, y, w, h float32
 	label      string
@@ -328,6 +321,13 @@ func (b *ToggleButton) Draw(screen *ebiten.Image) {
 	op.GeoM.Translate(float64(b.x+4), float64(b.y+8))
 	op.ColorScale.ScaleWithColor(color.White)
 	text.Draw(screen, b.label, smallFont, op)
+}
+
+type Waveform struct {
+	vertices []ebiten.Vertex
+	indices  []uint16
+
+	x, y, w, h float32
 }
 
 func NewWaveform(x, y, w, h float32) *Waveform {
@@ -440,20 +440,12 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	g.low.Draw(screen)
 }
 
-func randomInt16(rmin, rmax int16) int16 {
-	return rmin + int16(rand.Intn(int(rmax-rmin)))
-}
-
 func (g *Game) Update() error {
 	if g.quit {
 		return ebiten.Termination
 	}
 
 	g.numberInput.Update()
-
-	for i := 0; i < len(g.samples); i++ {
-		g.samples[i] = randomInt16(-16000, 16000)
-	}
 
 	g.waveform.Update(g.samples[:])
 	g.smeter.Update(g.smeterValue)

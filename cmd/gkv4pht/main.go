@@ -47,7 +47,7 @@ func init() {
 }
 
 const (
-	screenWidth  = 640
+	screenWidth  = 400
 	screenHeight = 480
 )
 
@@ -65,9 +65,12 @@ type Game struct {
 	pre         *ToggleButton
 	high        *ToggleButton
 	low         *ToggleButton
+	scan        *ToggleButton
+	bandwidth   *ToggleButton
 	quit        bool
 
 	radio   *kv4pht.CommandProcessor
+	mode    int
 	bw      int
 	squelch int
 	freq    float64
@@ -293,15 +296,19 @@ func NewToggleButton(x, y, w, h float32, label string, value bool, onClick func(
 	}
 }
 
+func (b *ToggleButton) SetValue(value bool) {
+	b.value = value
+	if b.onClick != nil {
+		b.onClick(b.value)
+	}
+}
+
 func (b *ToggleButton) Update() {
 	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 		x, y := ebiten.CursorPosition()
 		if float32(x) >= b.x && float32(x) <= b.x+b.w &&
 			float32(y) >= b.y && float32(y) <= b.y+b.h {
-			b.value = !b.value
-			if b.onClick != nil {
-				b.onClick(b.value)
-			}
+			b.SetValue(!b.value)
 		}
 	}
 }
@@ -433,6 +440,8 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	g.numberInput.Draw(screen)
 	g.waveform.Draw(screen)
+	g.scan.Draw(screen)
+	g.bandwidth.Draw(screen)
 	g.smeter.Draw(screen)
 	g.band.Draw(screen)
 	g.pre.Draw(screen)
@@ -448,6 +457,8 @@ func (g *Game) Update() error {
 	g.numberInput.Update()
 
 	g.waveform.Update(g.samples[:])
+	g.scan.Update()
+	g.bandwidth.Update()
 	g.smeter.Update(g.smeterValue)
 	g.band.Update()
 	g.pre.Update()
@@ -458,6 +469,77 @@ func (g *Game) Update() error {
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 	return screenWidth, screenHeight
+}
+
+func (g *Game) Scan(freq float64) {
+	var min, max, step float64
+
+	if g.mode == kv4pht.MODE_VHF {
+		min, max = freq, float64(kv4pht.VHF_MAX_FREQ)
+	} else {
+		min, max = freq, float64(kv4pht.UHF_MAX_FREQ)
+	}
+
+	if g.bw == kv4pht.DRA818_25K {
+		step = 0.025
+	} else {
+		step = 0.0125
+	}
+
+	if err := g.radio.SendFilters(false, false, false); err != nil {
+		log.Printf("Send FILTERS: %v", err)
+		return
+	}
+
+	if err := g.radio.SendGroup(g.bw, min, min, 4); err != nil { // it seems that scan needs to be sent with a squelch > 0
+		log.Printf("Send GROUP: %v", err)
+		return
+	}
+
+freq_loop:
+	for f := min; f <= max; f += step {
+		g.numberInput.SetValue(int(f * 1000000))
+
+		if err := g.radio.SendScan(f); err != nil {
+			log.Printf("Send SCAN: %v", err)
+			return
+		}
+
+		for i := 0; i < 10; i++ {
+			if g.radio.Scanned() != kv4pht.SCAN_WAITING {
+				break
+			}
+
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		scanned := g.radio.Scanned()
+		switch {
+		case scanned == kv4pht.SCAN_WAITING:
+			log.Fatal("No SCAN response received")
+
+		case scanned == kv4pht.SCAN_NOT_FOUND:
+			continue
+
+		case scanned&kv4pht.SCAN_FOUND != 0:
+			log.Printf("SCAN found %v", f)
+			g.freq = f
+			break freq_loop
+
+		default:
+			log.Printf("SCAN unknown response %v", g.radio.Scanned())
+		}
+	}
+
+	g.numberInput.SetValue(int(g.freq * 1000000))
+
+	if err := g.radio.SendFilters(g.pre.value, g.high.value, g.low.value); err != nil {
+		log.Printf("Send FILTERS: %v", err)
+		return
+	}
+	if err := g.radio.SendGroup(g.bw, g.freq, g.freq, g.squelch); err != nil {
+		log.Printf("Send GROUP: %v", err)
+	}
 }
 
 func main() {
@@ -494,25 +576,29 @@ func main() {
 		maxfreq = int(kv4pht.UHF_MAX_FREQ * 1000000)
 	}
 
+	radio, err := kv4pht.Start(*dev)
+	if err != nil {
+		log.Fatalf("Start: %v", err)
+	}
+
 	g.numberInput = NewNumberInput(minfreq, maxfreq, left, top)
 	w, h := g.numberInput.Size()
 
 	g.band = NewToggleButton(left+w+20, top, w/2-10, h, "VHF   UHF", true, func(value bool) {
-		var mode int
 
 		if value {
-			mode = kv4pht.MODE_VHF
+			g.mode = kv4pht.MODE_VHF
 			minfreq := int(kv4pht.VHF_MIN_FREQ * 1000000)
 			maxfreq := int(kv4pht.VHF_MAX_FREQ * 1000000)
 			g.numberInput.SetLimits(minfreq, maxfreq)
 		} else {
-			mode = kv4pht.MODE_UHF
+			g.mode = kv4pht.MODE_UHF
 			minfreq := int(kv4pht.UHF_MIN_FREQ * 1000000)
 			maxfreq := int(kv4pht.UHF_MAX_FREQ * 1000000)
 			g.numberInput.SetLimits(minfreq, maxfreq)
 		}
 
-		if err := g.radio.SendConfig(mode); err != nil {
+		if err := g.radio.SendConfig(g.mode); err != nil {
 			log.Printf("Send CONFIG: %v", err)
 		}
 	})
@@ -523,15 +609,31 @@ func main() {
 	top += h/2 + 10
 	g.waveform = NewWaveform(left, top, w, h)
 
-	radio, err := kv4pht.Start(*dev)
-	if err != nil {
-		log.Fatalf("Start: %v", err)
-	}
+	g.bandwidth = NewToggleButton(left+w+20, top, w/2-10, h, "Wide Narr.", g.bw == kv4pht.DRA818_25K, func(value bool) {
+		if value {
+			g.bw = kv4pht.DRA818_25K
+		} else {
+			g.bw = kv4pht.DRA818_12K5
+		}
+
+		if err := g.radio.SendGroup(g.bw, g.freq, g.freq, g.squelch); err != nil {
+			log.Printf("Send GROUP: %v", err)
+		}
+	})
 
 	top += h + 10
-	g.pre = NewToggleButton(left, top, w, h, "Pre-emphasis", *pre, func(value bool) {
+	g.pre = NewToggleButton(left, top, w, h, "Pre-emph.", *pre, func(value bool) {
 		if err := g.radio.SendFilters(g.pre.value, g.high.value, g.low.value); err != nil {
 			log.Printf("Send FILTERS: %v", err)
+		}
+	})
+
+	g.scan = NewToggleButton(left+w+20, top, w/2-10, h, "Scan", false, func(value bool) {
+		if value {
+			go func() {
+				g.Scan(g.freq)
+				g.scan.SetValue(false)
+			}()
 		}
 	})
 
@@ -611,11 +713,11 @@ func main() {
 			return
 		}
 
-		mode := kv4pht.MODE_VHF
+		g.mode = kv4pht.MODE_VHF
 		if *band == "uhf" || *freq >= kv4pht.UHF_MIN_FREQ {
-			mode = kv4pht.MODE_UHF
+			g.mode = kv4pht.MODE_UHF
 		}
-		if err := g.radio.SendConfig(mode); err != nil {
+		if err := g.radio.SendConfig(g.mode); err != nil {
 			log.Fatalf("Send CONFIG: %v", err)
 			return
 		}

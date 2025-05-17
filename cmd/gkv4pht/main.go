@@ -51,10 +51,6 @@ const (
 	screenHeight = 480
 )
 
-func maxCounter(index int) int {
-	return 128 + (17*index+32)%64
-}
-
 type Game struct {
 	samples []int16
 
@@ -121,7 +117,6 @@ func NewNumberInput(minValue, maxValue int, x, y float32) *NumberInput {
 }
 
 func (n *NumberInput) Size() (float32, float32) {
-	//return n.dw * float32(n.maxDigits), n.dh
 	return float32(n.bounds.Dx()), float32(n.bounds.Dy())
 }
 

@@ -156,7 +156,6 @@ func (n *NumberInput) HandleButtonInput(context *guigui.Context) guigui.HandleIn
 		// Handle numeric input
 		for k := ebiten.Key0; k <= ebiten.Key9; k++ {
 			if inpututil.IsKeyJustPressed(k) {
-				log.Printf("Key %d pressed", k)
 				digit := int(k) - int(ebiten.Key0)
 				// Calculate position value based on cursor
 				multiplier := 1

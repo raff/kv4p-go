@@ -23,7 +23,7 @@ func (b *Bar) Draw(context *guigui.Context, dst *ebiten.Image) {
 	bw := float32(bb.Dx())
 	bh := float32(bb.Dy())
 
-	w := bw / float32(b.maxValue - b.minValue)
+	w := bw / float32(b.maxValue-b.minValue)
 
 	// Draw the S-meter
 	vector.DrawFilledRect(dst, bx, by, bw, bh, color.RGBA{0x33, 0x33, 0x33, 0xff}, false) // anti-aliased

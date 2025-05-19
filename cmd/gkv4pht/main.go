@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	screenWidth  = 300
+	screenWidth  = 330
 	screenHeight = 480
 )
 

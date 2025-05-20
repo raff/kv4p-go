@@ -229,6 +229,7 @@ func main() {
 	r.freq = *freq
 
 	r.freqInput.SetValue(int(r.freq * 1000000))
+	r.freqInput.SetSeparator(',')
 	r.freqInput.SetOnValueChanged(func(v int) {
 		r.freq = float64(v) / 1000000
 

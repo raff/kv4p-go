@@ -50,6 +50,7 @@ type NumberInput struct {
 	minValue  int
 	maxValue  int
 	maxDigits int
+	separator rune
 	editing   bool
 	cursor    int
 
@@ -60,6 +61,10 @@ func (n *NumberInput) DefaultSize(context *guigui.Context) image.Point {
 	// Calculate the size based on the number of digits
 	_, dw, dh := getFontAndMetrics(context)
 	return image.Pt(int(dw*scale)*(n.maxDigits+2), int(dh*scale))
+}
+
+func (n *NumberInput) SetSeparator(sep rune) {
+	n.separator = sep
 }
 
 func (n *NumberInput) SetLimits(minValue, maxValue int) {
@@ -248,11 +253,16 @@ func (n *NumberInput) Draw(context *guigui.Context, dst *ebiten.Image) {
 	for i, ch := range str {
 		x := int(bx) + i*int(sw)
 
+		digit := string(ch)
+		if n.separator != 0 && (n.maxDigits-i)%3 == 1 && i != n.maxDigits-1 {
+			digit += string(n.separator)
+		}
+
 		op := &text.DrawOptions{}
 		op.GeoM.Scale(float64(scale), float64(scale))
 		op.GeoM.Translate(float64(x+8), float64(by+4))
 		op.ColorScale.ScaleWithColor(color.White)
-		text.Draw(dst, string(ch), font, op)
+		text.Draw(dst, digit, font, op)
 	}
 
 	// Draw cursor if editing

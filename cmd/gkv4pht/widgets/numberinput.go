@@ -18,12 +18,11 @@ import (
 )
 
 const (
-// textScale = 2.0
+	scale = 1.0
 )
 
 var (
-	largeFont text.Face
-	dh, dw    float32
+	numberFont *text.GoTextFaceSource
 )
 
 func init() {
@@ -32,15 +31,16 @@ func init() {
 		log.Fatal("error loading font", err)
 	}
 
-	largeFont = &text.GoTextFace{Source: ff, Size: 28}
-
-	m := largeFont.Metrics()
-	dw = float32(text.Advance("0 ", largeFont))                    // * textScale
-	dh = float32(m.HLineGap + m.HAscent + m.HDescent + m.HLineGap) // * textScale
+	numberFont = ff
 }
 
-func currentScale(context *guigui.Context) float32 {
-	return float32(float64(basicwidget.UnitSize(context)) / basicwidget.FontSize(context))
+func getFontAndMetrics(context *guigui.Context) (font *text.GoTextFace, dw, dh float32) {
+	font = &text.GoTextFace{Source: numberFont, Size: basicwidget.FontSize(context) * 2}
+
+	m := font.Metrics()
+	dw = float32(text.Advance("0 ", font))
+	dh = float32(m.HLineGap + m.HAscent + m.HDescent + m.HLineGap)
+	return
 }
 
 type NumberInput struct {
@@ -58,7 +58,7 @@ type NumberInput struct {
 
 func (n *NumberInput) DefaultSize(context *guigui.Context) image.Point {
 	// Calculate the size based on the number of digits
-	scale := currentScale(context)
+	_, dw, dh := getFontAndMetrics(context)
 	return image.Pt(int(dw*scale)*(n.maxDigits+2), int(dh*scale))
 }
 
@@ -114,7 +114,7 @@ func (n *NumberInput) HandlePointingInput(context *guigui.Context) guigui.Handle
 		b := context.Bounds(n)
 		c := image.Pt(ebiten.CursorPosition()).Sub(b.Min)
 
-		scale := currentScale(context)
+		_, dw, _ := getFontAndMetrics(context)
 
 		// Calculate which digit was clicked
 		cursor := c.X / int(dw*scale)
@@ -236,8 +236,7 @@ func (n *NumberInput) Draw(context *guigui.Context, dst *ebiten.Image) {
 	bx := float32(b.Min.X)
 	by := float32(b.Min.Y)
 
-	scale := currentScale(context)
-
+	font, dw, dh := getFontAndMetrics(context)
 	sw := dw * scale
 	sh := dh * scale
 
@@ -253,12 +252,12 @@ func (n *NumberInput) Draw(context *guigui.Context, dst *ebiten.Image) {
 		op.GeoM.Scale(float64(scale), float64(scale))
 		op.GeoM.Translate(float64(x+8), float64(by+4))
 		op.ColorScale.ScaleWithColor(color.White)
-		text.Draw(dst, string(ch), largeFont, op)
+		text.Draw(dst, string(ch), font, op)
 	}
 
 	// Draw cursor if editing
 	if n.editing && n.cursor < n.maxDigits {
-		x := int(bx) + n.cursor*int(sw)
+		x := int(bx) + int(float32(n.cursor)*sw)
 		vector.DrawFilledRect(dst, float32(x), by+sh-4, sw, 2, color.RGBA{0xff, 0xff, 0xff, 0xff}, false) // anti-aliased
 	}
 }

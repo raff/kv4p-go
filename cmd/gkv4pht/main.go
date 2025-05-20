@@ -35,6 +35,8 @@ const (
 type Root struct {
 	guigui.DefaultWidget
 
+	width int
+
 	background basicwidget.Background
 	form       basicwidget.Form
 
@@ -64,10 +66,26 @@ type Root struct {
 	freq    float64
 }
 
+func (r *Root) SetMode(mode int) {
+	r.mode = mode
+
+	if r.mode == kv4pht.MODE_VHF {
+		minfreq := int(kv4pht.VHF_MIN_FREQ * 1000000)
+		maxfreq := int(kv4pht.VHF_MAX_FREQ * 1000000)
+		r.freqInput.SetLimits(minfreq, maxfreq)
+	} else {
+		minfreq := int(kv4pht.UHF_MIN_FREQ * 1000000)
+		maxfreq := int(kv4pht.UHF_MAX_FREQ * 1000000)
+		r.freqInput.SetLimits(minfreq, maxfreq)
+	}
+}
+
 func (r *Root) Build(context *guigui.Context, appender *guigui.ChildWidgetAppender) error {
 	// log.Println("Root.Build")
 
-	appender.AppendChildWidgetWithBounds(&r.background, context.Bounds(r))
+	bounds := context.Bounds(r)
+
+	appender.AppendChildWidgetWithBounds(&r.background, bounds)
 	context.SetColorMode(guigui.ColorModeDark)
 
 	r.bands.SetItems([]basicwidget.SegmentedControlItem[int]{
@@ -77,17 +95,7 @@ func (r *Root) Build(context *guigui.Context, appender *guigui.ChildWidgetAppend
 	r.bands.SetDirection(basicwidget.SegmentedControlDirectionHorizontal)
 	r.bands.SetOnItemSelected(func(i int) {
 		if item, ok := r.bands.ItemByIndex(i); ok && item.ID != r.mode {
-			r.mode = item.ID
-
-			if r.mode == kv4pht.MODE_VHF {
-				minfreq := int(kv4pht.VHF_MIN_FREQ * 1000000)
-				maxfreq := int(kv4pht.VHF_MAX_FREQ * 1000000)
-				r.freqInput.SetLimits(minfreq, maxfreq)
-			} else {
-				minfreq := int(kv4pht.UHF_MIN_FREQ * 1000000)
-				maxfreq := int(kv4pht.UHF_MAX_FREQ * 1000000)
-				r.freqInput.SetLimits(minfreq, maxfreq)
-			}
+			r.SetMode(item.ID)
 
 			if err := r.radio.SendConfig(r.mode); err != nil {
 				log.Printf("Send CONFIG: %v", err)
@@ -197,13 +205,6 @@ func main() {
 
 	r := &Root{}
 
-	minfreq := int(kv4pht.VHF_MIN_FREQ * 1000000)
-	maxfreq := int(kv4pht.VHF_MAX_FREQ * 1000000)
-	if *band == "uhf" || *freq >= kv4pht.UHF_MIN_FREQ {
-		minfreq = int(kv4pht.UHF_MIN_FREQ * 1000000)
-		maxfreq = int(kv4pht.UHF_MAX_FREQ * 1000000)
-	}
-
 	if *bw == "wide" {
 		r.bw = kv4pht.DRA818_25K
 	} else if *bw == "narrow" {
@@ -218,15 +219,15 @@ func main() {
 		*squelch = 8
 	}
 
-	r.mode = kv4pht.MODE_VHF
-	if *band == "uhf" || *freq >= kv4pht.UHF_MIN_FREQ {
-		r.mode = kv4pht.MODE_UHF
+	if *band == "vhf" {
+		r.SetMode(kv4pht.MODE_VHF)
+	} else if *band == "uhf" || *freq >= kv4pht.UHF_MIN_FREQ {
+		r.SetMode(kv4pht.MODE_UHF)
 	}
 
 	r.squelch = *squelch
 	r.freq = *freq
 
-	r.freqInput.SetLimits(minfreq, maxfreq)
 	r.freqInput.SetValue(int(r.freq * 1000000))
 	r.freqInput.SetOnValueChanged(func(v int) {
 		r.freq = float64(v) / 1000000

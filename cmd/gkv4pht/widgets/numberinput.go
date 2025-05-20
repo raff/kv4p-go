@@ -14,10 +14,11 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 
 	"github.com/hajimehoshi/guigui"
+	"github.com/hajimehoshi/guigui/basicwidget"
 )
 
 const (
-	textScale = 2.0
+// textScale = 2.0
 )
 
 var (
@@ -34,8 +35,12 @@ func init() {
 	largeFont = &text.GoTextFace{Source: ff, Size: 28}
 
 	m := largeFont.Metrics()
-	dw = float32(text.Advance("0 ", largeFont)) * textScale
-	dh = float32(m.HLineGap+m.HAscent+m.HDescent+m.HLineGap) * textScale
+	dw = float32(text.Advance("0 ", largeFont))                    // * textScale
+	dh = float32(m.HLineGap + m.HAscent + m.HDescent + m.HLineGap) // * textScale
+}
+
+func currentScale(context *guigui.Context) float32 {
+	return float32(float64(basicwidget.UnitSize(context)) / basicwidget.FontSize(context))
 }
 
 type NumberInput struct {
@@ -53,7 +58,8 @@ type NumberInput struct {
 
 func (n *NumberInput) DefaultSize(context *guigui.Context) image.Point {
 	// Calculate the size based on the number of digits
-	return image.Pt(int(dw)*n.maxDigits, int(dh))
+	scale := currentScale(context)
+	return image.Pt(int(dw*scale)*(n.maxDigits+2), int(dh*scale))
 }
 
 func (n *NumberInput) SetLimits(minValue, maxValue int) {
@@ -108,8 +114,10 @@ func (n *NumberInput) HandlePointingInput(context *guigui.Context) guigui.Handle
 		b := context.Bounds(n)
 		c := image.Pt(ebiten.CursorPosition()).Sub(b.Min)
 
+		scale := currentScale(context)
+
 		// Calculate which digit was clicked
-		cursor := c.X / int(dw)
+		cursor := c.X / int(dw*scale)
 		if cursor < 0 {
 			cursor = 0
 		} else if cursor >= n.maxDigits {
@@ -225,29 +233,32 @@ func (n *NumberInput) HandleButtonInput(context *guigui.Context) guigui.HandleIn
 
 func (n *NumberInput) Draw(context *guigui.Context, dst *ebiten.Image) {
 	b := context.Bounds(n)
-	ux := float32(b.Min.X)
-	uy := float32(b.Min.Y)
-	//uw := float32(b.Dx())
-	//uh := float32(b.Dy())
+	bx := float32(b.Min.X)
+	by := float32(b.Min.Y)
+
+	scale := currentScale(context)
+
+	sw := dw * scale
+	sh := dh * scale
 
 	// Draw background
-	vector.DrawFilledRect(dst, ux, uy, float32(n.maxDigits)*dw, dh, color.RGBA{0x33, 0x33, 0x33, 0xff}, false) // anti-aliased
+	vector.DrawFilledRect(dst, bx, by, float32(n.maxDigits)*sw, sh, color.RGBA{0x33, 0x33, 0x33, 0xff}, false) // anti-aliased
 
 	// Draw digits
 	str := fmt.Sprintf(fmt.Sprintf("%%0%dd", n.maxDigits), n.value)
 	for i, ch := range str {
-		x := int(ux) + i*int(dw)
+		x := int(bx) + i*int(sw)
 
 		op := &text.DrawOptions{}
-		op.GeoM.Scale(2.0, 2.0)
-		op.GeoM.Translate(float64(x+8), float64(uy+4))
+		op.GeoM.Scale(float64(scale), float64(scale))
+		op.GeoM.Translate(float64(x+8), float64(by+4))
 		op.ColorScale.ScaleWithColor(color.White)
 		text.Draw(dst, string(ch), largeFont, op)
 	}
 
 	// Draw cursor if editing
 	if n.editing && n.cursor < n.maxDigits {
-		x := int(ux) + n.cursor*int(dw)
-		vector.DrawFilledRect(dst, float32(x), uy+dh-4, dw, 2, color.RGBA{0xff, 0xff, 0xff, 0xff}, false) // anti-aliased
+		x := int(bx) + n.cursor*int(sw)
+		vector.DrawFilledRect(dst, float32(x), by+sh-4, sw, 2, color.RGBA{0xff, 0xff, 0xff, 0xff}, false) // anti-aliased
 	}
 }

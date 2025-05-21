@@ -51,6 +51,7 @@ type NumberInput struct {
 	maxValue  int
 	maxDigits int
 	separator rune
+	step      int
 	editing   bool
 	cursor    int
 
@@ -65,6 +66,10 @@ func (n *NumberInput) DefaultSize(context *guigui.Context) image.Point {
 
 func (n *NumberInput) SetSeparator(sep rune) {
 	n.separator = sep
+}
+
+func (n *NumberInput) SetStep(step int) {
+	n.step = step
 }
 
 func (n *NumberInput) SetLimits(minValue, maxValue int) {
@@ -115,6 +120,10 @@ func (n *NumberInput) SetOnValueChanged(callback func(value int)) {
 }
 
 func (n *NumberInput) HandlePointingInput(context *guigui.Context) guigui.HandleInputResult {
+	if !context.IsFocusedOrHasFocusedChild(n) {
+		n.cursor = n.maxDigits
+	}
+
 	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 		b := context.Bounds(n)
 		c := image.Pt(ebiten.CursorPosition()).Sub(b.Min)
@@ -135,6 +144,9 @@ func (n *NumberInput) HandlePointingInput(context *guigui.Context) guigui.Handle
 			context.SetFocused(n, true)
 			guigui.RequestRedraw(n)
 		}
+	} else if n.cursor >= n.maxDigits {
+		guigui.RequestRedraw(n)
+		n.editing = false
 	}
 
 	return guigui.HandleInputResult{}
@@ -153,15 +165,16 @@ func (n *NumberInput) HandleButtonInput(context *guigui.Context) guigui.HandleIn
 		}
 		if dy < 0 {
 			n.value += multiplier
+
+			if n.step != 0 && n.value%n.step != 0 {
+				n.value += n.step - (n.value % n.step)
+			}
 		} else {
 			n.value -= multiplier
-		}
-		// Ensure value stays positive and within bounds
-		if n.value < n.minValue {
-			n.value = n.minValue
-		}
-		if n.value >= n.maxValue {
-			n.value = n.maxValue
+
+			if n.step != 0 && n.value%n.step != 0 {
+				n.value -= (n.value % n.step)
+			}
 		}
 	}
 
@@ -207,9 +220,9 @@ func (n *NumberInput) HandleButtonInput(context *guigui.Context) guigui.HandleIn
 				multiplier *= 10
 			}
 			n.value += multiplier
-			// Ensure value stays positive and within bounds
-			if n.value >= n.maxValue {
-				n.value = n.maxValue
+
+			if n.step != 0 && n.value%n.step != 0 {
+				n.value += n.step - (n.value % n.step)
 			}
 		} else if inpututil.IsKeyJustPressed(ebiten.KeyDown) {
 			// Calculate the multiplier based on cursor position
@@ -218,11 +231,19 @@ func (n *NumberInput) HandleButtonInput(context *guigui.Context) guigui.HandleIn
 				multiplier *= 10
 			}
 			n.value -= multiplier
-			// Ensure value stays positive and within bounds
-			if n.value < n.minValue {
-				n.value = n.minValue
+
+			if n.step != 0 && n.value%n.step != 0 {
+				n.value -= (n.value % n.step)
 			}
 		}
+
+	}
+
+	// Ensure value is within limits
+	if n.value < n.minValue {
+		n.value = n.minValue
+	} else if n.value >= n.maxValue {
+		n.value = n.maxValue
 	}
 
 	if n.value != prev && n.onValueChanged != nil {

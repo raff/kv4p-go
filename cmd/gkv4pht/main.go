@@ -114,6 +114,12 @@ func (r *Root) Build(context *guigui.Context, appender *guigui.ChildWidgetAppend
 		if item, ok := r.bws.ItemByIndex(i); ok && item.ID != r.bw {
 			r.bw = item.ID
 
+			if r.bw == kv4pht.DRA818_25K {
+				r.freqInput.SetStep(25000)
+			} else {
+				r.freqInput.SetStep(12500)
+			}
+
 			if err := r.radio.SendGroup(r.bw, r.freq, r.freq, r.squelch); err != nil {
 				log.Printf("Send GROUP: %v", err)
 			}
@@ -207,8 +213,10 @@ func main() {
 
 	if *bw == "wide" {
 		r.bw = kv4pht.DRA818_25K
+		r.freqInput.SetStep(25000)
 	} else if *bw == "narrow" {
 		r.bw = kv4pht.DRA818_12K5
+		r.freqInput.SetStep(12500)
 	} else {
 		log.Fatalf("Invalid bandwidth: %s", *bw)
 	}

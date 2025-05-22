@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"waveform/widgets"
+	"gkv4pht/widgets"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/guigui"

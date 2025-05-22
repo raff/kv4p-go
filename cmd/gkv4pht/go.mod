@@ -1,10 +1,11 @@
-module waveform
+module gkv4pht
 
 go 1.24.3
 
 require (
 	github.com/hajimehoshi/ebiten/v2 v2.9.0-alpha.5.0.20250514082650-2b29effe006c
 	github.com/hajimehoshi/guigui v0.0.0-20250514172815-532c5f955827
+	github.com/mjibson/go-dsp v0.0.0-20180508042940-11479a337f12
 	github.com/raff/kv4p-go v0.0.0-20250514223924-72da6866742d
 )
 

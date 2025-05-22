@@ -15,8 +15,6 @@ type Bar struct {
 }
 
 func (b *Bar) Draw(context *guigui.Context, dst *ebiten.Image) {
-	// Update the waveform data
-
 	bb := context.Bounds(b)
 	bx := float32(bb.Min.X)
 	by := float32(bb.Min.Y)
@@ -25,13 +23,13 @@ func (b *Bar) Draw(context *guigui.Context, dst *ebiten.Image) {
 
 	w := bw / float32(b.maxValue-b.minValue)
 
-	// Draw the S-meter
+	// Draw the background
 	vector.DrawFilledRect(dst, bx, by, bw, bh, color.RGBA{0x33, 0x33, 0x33, 0xff}, false) // anti-aliased
 	if b.value == 0 {
 		return
 	}
 
-	// Draw the S-meter scale
+	// Draw the bar
 	for i := 0; i < b.value; i++ {
 		x := bx + float32(i)*w
 		vector.DrawFilledRect(dst, x+4, by+4, w-4, bh-8, color.RGBA{0xe0, 0xe0, 0xe0, 0xe0}, false) // anti-aliased

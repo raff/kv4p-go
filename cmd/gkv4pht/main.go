@@ -43,14 +43,14 @@ type Root struct {
 	freqText     basicwidget.Text
 	bandText     basicwidget.Text
 	bwText       basicwidget.Text
-	waveformText basicwidget.Text
+	audiovisText basicwidget.Text
 	squelchText  basicwidget.Text
 	smeterText   basicwidget.Text
 
 	freqInput widgets.NumberInput
 	bands     basicwidget.SegmentedControl[int]
 	bws       basicwidget.SegmentedControl[int]
-	waveform  widgets.Waveform
+	audiovis  widgets.Audiovis
 	ssquelch  basicwidget.Slider
 	smeter    widgets.Bar
 
@@ -132,7 +132,7 @@ func (r *Root) Build(context *guigui.Context, appender *guigui.ChildWidgetAppend
 	r.bwText.SetValue("Bandwidth")
 	r.squelchText.SetValue("Squelch")
 	r.smeterText.SetValue("S-Meter")
-	r.waveformText.SetValue("Audio")
+	r.audiovisText.SetValue("Audio")
 
 	u := basicwidget.UnitSize(context)
 	swidth := context.Bounds(r).Dx() / 3 * 2
@@ -141,7 +141,7 @@ func (r *Root) Build(context *guigui.Context, appender *guigui.ChildWidgetAppend
 	context.SetSize(&r.bws, image.Pt(swidth, guigui.DefaultSize))
 	context.SetSize(&r.ssquelch, image.Pt(swidth, guigui.DefaultSize))
 	context.SetSize(&r.smeter, image.Pt(swidth, 1*u))
-	context.SetSize(&r.waveform, image.Pt(swidth, 6*u))
+	context.SetSize(r.audiovis, image.Pt(swidth, 6*u))
 
 	r.form.SetItems([]basicwidget.FormItem{
 		{
@@ -165,8 +165,8 @@ func (r *Root) Build(context *guigui.Context, appender *guigui.ChildWidgetAppend
 			SecondaryWidget: &r.smeter,
 		},
 		{
-			PrimaryWidget:   &r.waveformText,
-			SecondaryWidget: &r.waveform,
+			PrimaryWidget:   &r.audiovisText,
+			SecondaryWidget: r.audiovis,
 		},
 	})
 
@@ -181,7 +181,7 @@ func (r *Root) Tick(context *guigui.Context) error {
 		return ebiten.Termination
 	}
 
-	r.waveform.Update(context, r.samples)
+	r.audiovis.Update(context, r.samples, kv4pht.AUDIO_SAMPLING_RATE)
 	return nil
 }
 
@@ -210,6 +210,9 @@ func main() {
 	}
 
 	r := &Root{}
+
+	//r.audiovis = &widgets.Waveform{}
+	r.audiovis = &widgets.Audiometer{}
 
 	if *bw == "wide" {
 		r.bw = kv4pht.DRA818_25K

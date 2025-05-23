@@ -38,8 +38,10 @@ func (w *Waveform) Draw(context *guigui.Context, dst *ebiten.Image) {
 	})
 }
 
-func (w *Waveform) Update(context *guigui.Context, samples []int16) {
+func (w *Waveform) Update(context *guigui.Context, samples []int16, sampleRate int) {
 	// Update the waveform data
+
+	_ = sampleRate // unused
 
 	var path vector.Path
 

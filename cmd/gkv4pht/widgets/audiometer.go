@@ -16,7 +16,7 @@ import (
 type Audiometer struct {
 	guigui.DefaultWidget
 
-	numBands   int // number of bars
+	numBands int // number of bars
 
 	bars []float64
 }
@@ -38,19 +38,27 @@ func (m *Audiometer) Draw(context *guigui.Context, dst *ebiten.Image) {
 		// Normalize and scale the band value
 		h := float32(math.Log10(1+m.bars[i]) * float64(bh))
 		if h > bh {
-			h = bh
+			h = bh - 2
 		}
 
-		vector.DrawFilledRect(dst, x, by, w-2, h, color.RGBA{0xe0, 0xe0, 0xe0, 0xe0}, false) // anti-aliased
+		vector.DrawFilledRect(dst, x, by+bh, w-2, -h, color.RGBA{0xe0, 0xe0, 0xe0, 0xe0}, false) // anti-aliased
 		x += w
 	}
 }
 
 func (m *Audiometer) Update(context *guigui.Context, samples []int16, sampleRate int) {
+	if len(samples) == 0 {
+		return
+	}
+
 	// Convert int16 samples to float64
 	fsamples := make([]float64, len(samples))
 	for i := 0; i < len(samples); i++ {
-		fsamples[i] = float64(samples[i])
+		v := samples[i]
+		//if v < 0 {
+		//	v = 0
+		//}
+		fsamples[i] = float64(v) / 32768.0
 	}
 
 	// Apply Hanning window
@@ -66,7 +74,7 @@ func (m *Audiometer) Update(context *guigui.Context, samples []int16, sampleRate
 	}
 
 	// Calculate frequency bands
-	m.bars = make([]float64, m.numBands)
+	bands := make([]float64, m.numBands)
 	binWidth := int(fres) / m.numBands
 
 	for i := 0; i < m.numBands; i++ {
@@ -81,8 +89,9 @@ func (m *Audiometer) Update(context *guigui.Context, samples []int16, sampleRate
 					imag(spectrum[j])*imag(spectrum[j]))
 			}
 		}
-		m.bars[i] = sum / float64(binWidth)
+		bands[i] = sum / float64(binWidth)
 	}
 
+	m.bars = bands
 	guigui.RequestRedraw(m)
 }
